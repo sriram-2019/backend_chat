@@ -18,6 +18,7 @@ from .admin_views import (
     DocumentsView,
     AdminListView,
     StudentDetailView,
+    AdminCollegeDataView,
     RulesView,
     RuleDetailView,
     SyllabusView,
@@ -61,6 +62,7 @@ urlpatterns = [
     path('admin/documents/', DocumentsView.as_view(), name='admin-documents'),
     path('admin/list/', AdminListView.as_view(), name='admin-list'),
     path('admin/student/<str:username>/', StudentDetailView.as_view(), name='admin-student-detail'),
+    path('admin/college-data/', AdminCollegeDataView.as_view(), name='admin-college-data'),
     
     # Rules Management
     path('admin/rules/', RulesView.as_view(), name='admin-rules'),

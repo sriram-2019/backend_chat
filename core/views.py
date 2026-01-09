@@ -99,10 +99,14 @@ class LoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         
-        # Optional: Verify roll number if provided
+        # Optional: Verify roll number if provided (case-insensitive)
         if roll_no:
             try:
-                profile = StudentProfile.objects.get(user=user, roll_no=roll_no)
+                # Case-insensitive roll number check
+                profile = StudentProfile.objects.get(
+                    user=user, 
+                    roll_no__iexact=roll_no.strip()
+                )
             except StudentProfile.DoesNotExist:
                 return Response(
                     {"error": "Roll number does not match this account"},

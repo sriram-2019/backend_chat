@@ -9,7 +9,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-change-this-in-production')
 DEBUG = True
-ALLOWED_HOSTS = ['*']
+# Allow all hosts for development, but explicitly include PythonAnywhere domain
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '*',  # Fallback for development
+]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -89,15 +94,20 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings
 CORS_ALLOW_CREDENTIALS = True
+# When CORS_ALLOW_CREDENTIALS is True, you cannot use CORS_ALLOW_ALL_ORIGINS
+# Must specify exact origins
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    # Add your production frontend URL here when deployed
+    # "https://your-frontend-domain.com",
 ]
-CORS_ALLOW_ALL_ORIGINS = True  # Only for development
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:8000",
 ]
 
 # REST Framework Settings

@@ -1041,3 +1041,32 @@ class KnowledgeBaseApproveView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+class AdminCollegeDataView(APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        user = request.user if request.user.is_authenticated else None
+        if not user or not is_admin(user):
+            return Response(
+                {"error": "Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        data_type = request.query_params.get('type', 'rules')
+        
+        if data_type == 'rules':
+            data = Rule.objects.all().order_by('-created_at')
+            serializer = RuleSerializer(data, many=True)
+        elif data_type == 'syllabus':
+            data = Syllabus.objects.all().order_by('course', 'semester', 'subject_code')
+            serializer = SyllabusSerializer(data, many=True)
+        elif data_type == 'exams':
+            data = ExamInformation.objects.all().order_by('-exam_date')
+            serializer = ExamInformationSerializer(data, many=True)
+        else:
+            return Response(
+                {"error": f"Invalid type: {data_type}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        return Response(serializer.data, status=status.HTTP_200_OK)
