@@ -13,6 +13,7 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
+    'chatbackend1.pythonanywhere.com',
     '*',  # Fallback for development
 ]
 
@@ -100,6 +101,7 @@ CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://chatbackend1.pythonanywhere.com",
     # Add your production frontend URL here when deployed
     # "https://your-frontend-domain.com",
 ]
@@ -108,6 +110,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:8000",
+    "https://chatbackend1.pythonanywhere.com",
 ]
 
 # REST Framework Settings

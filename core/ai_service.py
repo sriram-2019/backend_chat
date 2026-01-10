@@ -20,11 +20,10 @@ load_dotenv(dotenv_path=env_path)
 
 # API Configuration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 # Initialize Gemini Client
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
-MODEL = "gemini-2.0-flash-exp"  # Using stable flash model
+MODEL = "gemini-2.5-flash"
 
 # Global State for Quota Handling
 _QUOTA_EXHAUSTED = False
@@ -285,45 +284,89 @@ def query_knowledge_base(user_text: str) -> Tuple[Optional[str], Optional[Knowle
         traceback.print_exc()
         return None, None
 
-def get_gemini_response(user_text: str, user=None, is_college_context=False) -> str:
-    """Get general or college-context AI response."""
-    if get_quota_status():
-        wait_time = _QUOTA_EXHAUSTED_UNTIL - timezone.now()
-        mins = max(1, int(wait_time.total_seconds() / 60))
-        return f"I'm experiencing high demand. Please try again in ~{mins} minutes or check the Knowledge Base."
-    
-    if not client: return "AI service unconfigured."
-    
-    history = []
-    if user:
-        past = ChatHistory.objects.filter(user=user).order_by('-timestamp')[:5]
-        for c in reversed(past):
-            if c.message: history.append({"role": "user", "parts": [{"text": c.message}]})
-            if c.response: history.append({"role": "model", "parts": [{"text": c.response}]})
 
-    sys_inst = "You are INTELLIQ, a helpful College Assistant."
-    if is_college_context:
-        sys_inst += " Focus on college rules and procedures. If unknown, refer to office."
-    else:
-        sys_inst += " Focus on academics, English coaching, and technology."
+def get_gemini_response(user_text: str, user=None, is_college_context: bool = True) -> str:
+    """Fallback to Gemini API for general questions."""
+    if not client:
+        return "AI service is not configured."
 
     try:
-        chat = client.chats.create(model=MODEL, history=history, config={"system_instruction": sys_inst})
-        return chat.send_message(user_text).text
+        # Retrieve the last 10 messages for this user to provide memory
+        history_context = []
+        if user:
+            recent_chats = ChatHistory.objects.filter(user=user).order_by('-timestamp')[:10]
+            # Convert to Gemini history format (oldest first)
+            for chat in reversed(recent_chats):
+                if chat.message: history_context.append({"role": "user", "parts": [{"text": chat.message}]})
+                if chat.response: history_context.append({"role": "model", "parts": [{"text": chat.response}]})
+
+        system_instruction = """
+You are INTELLIQ, a premium AI English Coach and Academic Assistant for college students.
+
+Your goals are:
+1. Help students improve their English grammar, vocabulary, and professional communication.
+2. Answer questions about Engineering, Technology, Mathematics, and Science subjects.
+3. Help with academic writing, reports, and presentation preparation.
+
+You should:
+- Maintain a professional yet encouraging tone.
+- Provide clear, accurate explanations.
+- If a question is entirely unrelated to academics or professional development, politely guide the student back to their studies.
+
+Focus on being a helpful mentor for both subject matter and language proficiency.
+"""
+        if is_college_context:
+            system_instruction += "\nAdditionally, focus on college rules and procedures. If unknown, refer to office."
+
+        # Start chat session with retrieved history from Database
+        chat = client.chats.create(
+            model=MODEL,
+            history=history_context,
+            config={
+                "system_instruction": system_instruction.strip()
+            }
+        )
+
+        response = chat.send_message(user_text)
+        return response.text
+
     except Exception as e:
         err = handle_api_error(e)
         if err == "QUOTA_EXHAUSTED":
             return "I'm experiencing high demand. Please try again later."
-        return f"Error: {err}"
+        return f"AI Brain Error: {str(e)}"
 
 def get_hybrid_response(user_text: str, user=None) -> Tuple[str, str]:
     """Main entry point for AI responses."""
     intent_data = classify_intent(user_text)
-    intent = intent_data.get("intent_type", "GENERAL")
+    intent_type = intent_data.get("intent_type", "GENERAL")
     
-    if intent == "COLLEGE_SPECIFIC":
+    response_text = None
+    intent = None
+
+    if intent_type == "COLLEGE_SPECIFIC":
+        # Part 1: Search Knowledge Base (KB part NOT touched)
         answer, entry = query_knowledge_base(user_text)
-        if answer: return answer, "kb_match"
-        return get_gemini_response(user_text, user, True), "ai_fallback"
+        if answer:
+            response_text = answer
+            intent = "kb_match"
     
-    return get_gemini_response(user_text, user, False), "ai_fallback"
+    if not response_text:
+        # Part 2: Fallback to Gemini AI
+        is_college = (intent_type == "COLLEGE_SPECIFIC")
+        response_text = get_gemini_response(user_text, user, is_college)
+        
+        if response_text.startswith("AI Brain Error:") or response_text == "AI service is not configured.":
+            intent = "error"
+        else:
+            intent = "ai_fallback"
+
+    # Part 3: Save Chat History (This builds the context for the next turn)
+    ChatHistory.objects.create(
+        user=user,
+        message=user_text,
+        response=response_text,
+        intent=intent
+    )
+    
+    return response_text, intent

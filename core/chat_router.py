@@ -29,6 +29,7 @@ def chat_reply(user_text: str, user=None) -> Tuple[str, str]:
         entry, score = kb_match
         confidence = 'HIGH' if score >= 0.7 else 'MEDIUM'
         
+        print(f"[API] Using KB Database (NO API call) - KB_ID={entry['id']}, Score={score:.2f}, Confidence={confidence}")
         print(f"KB Match: KB_ID={entry['id']}, Score={score:.2f}, Confidence={confidence}, Question='{entry['question'][:50]}...'")
         
         return entry['answer'], 'kb_match'
@@ -37,6 +38,8 @@ def chat_reply(user_text: str, user=None) -> Tuple[str, str]:
     # Only for general questions, explanations, or when KB doesn't have answer
     try:
         from .ai_service import get_gemini_response
+        
+        print(f"[API] Using Gemini API (fallback - no KB match found)")
         
         # Use Gemini with college context
         response_text = get_gemini_response(
@@ -48,8 +51,13 @@ def chat_reply(user_text: str, user=None) -> Tuple[str, str]:
         return response_text, 'ai_fallback'
         
     except Exception as e:
-        print(f"Error in Gemini fallback: {str(e)}")
-        return "I couldn't find that information in the knowledge base. Please contact the college office for assistance.", "error"
+        import traceback
+        error_str = str(e)
+        error_traceback = traceback.format_exc()
+        print(f"Error in Gemini fallback: {error_str}")
+        print(error_traceback)
+        # Raise the exception with full details so it can be caught by the view
+        raise Exception(f"Gemini API Error: {error_str}\n\nTraceback:\n{error_traceback}") from e
 
 
 def get_hybrid_response(user_text: str, user=None) -> Tuple[str, str]:

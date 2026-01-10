@@ -236,8 +236,8 @@ class ChatMessageView(APIView):
                         pass
         
         try:
-            # Import AI service
-            from .ai_service import get_hybrid_response
+            # Import chat router (KB-first, Gemini fallback)
+            from .chat_router import chat_reply
             
             # Save user message first
             user_message = ChatHistory.objects.create(
@@ -247,8 +247,8 @@ class ChatMessageView(APIView):
                 session_id=session_id
             )
             
-            # Get AI response using hybrid approach (KB + Gemini)
-            response_text, intent = get_hybrid_response(
+            # Get response using KB-first approach (minimizes Gemini usage)
+            response_text, intent = chat_reply(
                 user_text=message,
                 user=user
             )
@@ -273,8 +273,11 @@ class ChatMessageView(APIView):
             
         except Exception as e:
             import traceback
-            print(f"Error in ChatMessageView: {str(e)}")
-            print(traceback.format_exc())
+            error_str = str(e)
+            error_traceback = traceback.format_exc()
+            
+            print(f"Error in ChatMessageView: {error_str}")
+            print(error_traceback)
             
             # Save error message
             error_response = f"Sorry, I encountered an error processing your message. Please try again."
@@ -287,12 +290,19 @@ class ChatMessageView(APIView):
                 session_id=session_id
             )
             
+            # Return full error details
             return Response({
                 "message": error_response,
                 "response": error_response,
                 "chat_id": error_entry.id,
                 "session_id": session_id,
-                "error": str(e)
+                "error": error_str,
+                "error_details": {
+                    "error_type": type(e).__name__,
+                    "error_message": error_str,
+                    "traceback": error_traceback,
+                    "full_error": f"{type(e).__name__}: {error_str}\n\n{error_traceback}"
+                }
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class FeedbackView(APIView):

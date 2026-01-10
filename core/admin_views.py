@@ -1,4 +1,4 @@
-from rest_framework.views import APIView
+﻿from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
@@ -19,14 +19,34 @@ from .serializers import (
     KnowledgeBaseSerializer
 )
 
-def is_admin(user):
-    """Check if user is an admin"""
-    if not user or not user.is_authenticated:
+def is_admin(user, check_authenticated=False):
+    """Check if user is an admin (has AdminProfile OR is staff)"""
+    if not user:
+        return False
+    if check_authenticated and not user.is_authenticated:
         return False
     try:
-        return AdminProfile.objects.filter(user=user).exists()
+        # Allow users with AdminProfile OR staff users (teachers/admins)
+        return AdminProfile.objects.filter(user=user).exists() or user.is_staff
     except:
         return False
+
+def get_admin_user(request):
+    """Get admin user from request (session) or from user_id parameter"""
+    user = request.user if request.user.is_authenticated else None
+    if not user:
+        # Check both data and query_params for user_id
+        user_id = request.data.get('user_id') if isinstance(request.data, dict) else None
+        user_id = user_id or request.query_params.get('user_id')
+        if user_id:
+            try:
+                user = User.objects.get(id=user_id)
+            except (User.DoesNotExist, ValueError, TypeError):
+                pass
+    
+    if user and is_admin(user):
+        return user
+    return None
 
 class AdminRegisterView(APIView):
     permission_classes = [AllowAny]
@@ -129,8 +149,8 @@ class AdminLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED
             )
         
-        # Check if user is admin
-        if not is_admin(user):
+        # Check if user is admin - don't check session yet as we're logging in
+        if not is_admin(user, check_authenticated=False):
             return Response(
                 {"error": "Access denied. Admin account required."},
                 status=status.HTTP_403_FORBIDDEN
@@ -166,17 +186,8 @@ class AdminDashboardView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        # Get user from request
-        user = request.user if request.user.is_authenticated else None
+        user = get_admin_user(request)
         if not user:
-            user_id = request.query_params.get('user_id')
-            if user_id:
-                try:
-                    user = User.objects.get(id=user_id)
-                except User.DoesNotExist:
-                    pass
-        
-        if not user or not is_admin(user):
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -255,8 +266,8 @@ class AnalyticsView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -310,8 +321,8 @@ class UnsolvedQuestionsView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -324,8 +335,8 @@ class UnsolvedQuestionsView(APIView):
     
     def post(self, request):
         """Resolve an unsolved question"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -367,8 +378,8 @@ class DocumentsView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -385,8 +396,8 @@ class DocumentsView(APIView):
     
     def post(self, request):
         """Upload a document, extract text, and add to knowledge base"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -531,11 +542,13 @@ class AdminListView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        """Get all admin users - accessible for super admin and authenticated admins"""
-        # Allow access for:
-        # 1. Authenticated admin users
-        # 2. Unauthenticated requests (for super admin page - they use localStorage)
-        # This is safe since we're only listing admin profiles, not sensitive operations
+        """Get all admin users - accessible for authenticated admins"""
+        user = get_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         admins = AdminProfile.objects.all().order_by('-created_at')
         serializer = AdminProfileSerializer(admins, many=True)
@@ -546,8 +559,8 @@ class StudentDetailView(APIView):
     
     def get(self, request, username):
         """Get student details and chat history by username"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -603,8 +616,8 @@ class RulesView(APIView):
     
     def get(self, request):
         """Get all rules"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -625,8 +638,8 @@ class RulesView(APIView):
     
     def post(self, request):
         """Create a new rule"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -643,8 +656,8 @@ class RuleDetailView(APIView):
     
     def get(self, request, rule_id):
         """Get a specific rule"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -662,8 +675,8 @@ class RuleDetailView(APIView):
     
     def put(self, request, rule_id):
         """Update a rule"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -684,8 +697,8 @@ class RuleDetailView(APIView):
     
     def delete(self, request, rule_id):
         """Delete a rule"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -707,8 +720,8 @@ class SyllabusView(APIView):
     
     def get(self, request):
         """Get all syllabus entries"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -729,8 +742,8 @@ class SyllabusView(APIView):
     
     def post(self, request):
         """Create a new syllabus entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -747,8 +760,8 @@ class SyllabusDetailView(APIView):
     
     def get(self, request, syllabus_id):
         """Get a specific syllabus entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -766,8 +779,8 @@ class SyllabusDetailView(APIView):
     
     def put(self, request, syllabus_id):
         """Update a syllabus entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -788,8 +801,8 @@ class SyllabusDetailView(APIView):
     
     def delete(self, request, syllabus_id):
         """Delete a syllabus entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -811,8 +824,8 @@ class ExamInformationView(APIView):
     
     def get(self, request):
         """Get all exam information"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -833,8 +846,8 @@ class ExamInformationView(APIView):
     
     def post(self, request):
         """Create a new exam information entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -851,8 +864,8 @@ class ExamInformationDetailView(APIView):
     
     def get(self, request, exam_id):
         """Get a specific exam information"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -870,8 +883,8 @@ class ExamInformationDetailView(APIView):
     
     def put(self, request, exam_id):
         """Update exam information"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -892,8 +905,8 @@ class ExamInformationDetailView(APIView):
     
     def delete(self, request, exam_id):
         """Delete exam information"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -915,8 +928,8 @@ class KnowledgeBaseView(APIView):
     
     def get(self, request):
         """Get knowledge base entries - public for approved entries, admin for all"""
-        user = request.user if request.user.is_authenticated else None
-        is_admin_user = user and is_admin(user)
+        user = get_admin_user(request)
+        is_admin_user = user is not None
         
         approved = request.query_params.get('approved', None)
         entry_type = request.query_params.get('type', None)
@@ -939,16 +952,25 @@ class KnowledgeBaseView(APIView):
     
     def post(self, request):
         """Create a new knowledge base entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        serializer = KnowledgeBaseSerializer(data=request.data)
+        # Remove user_id from data before passing to serializer (it's not a model field)
+        kb_data = {k: v for k, v in request.data.items() if k != 'user_id'}
+        
+        serializer = KnowledgeBaseSerializer(data=kb_data)
         if serializer.is_valid():
-            kb_entry = serializer.save(created_by=user)
+            # Automatically approve admin-created entries
+            kb_entry = serializer.save(
+                created_by=user,
+                approved=True,
+                approved_by=user,
+                approved_at=timezone.now()
+            )
             return Response(KnowledgeBaseSerializer(kb_entry).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -957,8 +979,8 @@ class KnowledgeBaseDetailView(APIView):
     
     def get(self, request, kb_id):
         """Get a specific knowledge base entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -976,8 +998,8 @@ class KnowledgeBaseDetailView(APIView):
     
     def put(self, request, kb_id):
         """Update a knowledge base entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -985,7 +1007,9 @@ class KnowledgeBaseDetailView(APIView):
         
         try:
             kb_entry = KnowledgeBase.objects.get(id=kb_id)
-            serializer = KnowledgeBaseSerializer(kb_entry, data=request.data, partial=True)
+            # Remove user_id from data before passing to serializer
+            kb_data = {k: v for k, v in request.data.items() if k != 'user_id'}
+            serializer = KnowledgeBaseSerializer(kb_entry, data=kb_data, partial=True)
             if serializer.is_valid():
                 serializer.save()
                 return Response(serializer.data, status=status.HTTP_200_OK)
@@ -998,8 +1022,8 @@ class KnowledgeBaseDetailView(APIView):
     
     def delete(self, request, kb_id):
         """Delete a knowledge base entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -1020,8 +1044,8 @@ class KnowledgeBaseApproveView(APIView):
     
     def post(self, request, kb_id):
         """Approve a knowledge base entry"""
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -1045,8 +1069,8 @@ class AdminCollegeDataView(APIView):
     permission_classes = [AllowAny]
     
     def get(self, request):
-        user = request.user if request.user.is_authenticated else None
-        if not user or not is_admin(user):
+        user = get_admin_user(request)
+        if not user:
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
