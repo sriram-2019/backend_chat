@@ -470,34 +470,106 @@ class ImageQueryView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
-        """Process an uploaded image with optional text query"""
-        image = request.FILES.get('image')
-        query_text = request.data.get('query_text', '')
+        """Process an uploaded image with optional text query
         
-        if not image:
+        Accepts either:
+        1. FormData with 'image' file field (traditional upload)
+        2. JSON with 'image_base64' field (base64 encoded image for mobile compatibility)
+        """
+        query_text = request.data.get('query_text', '')
+        user = get_user_from_request(request)
+        
+        # Check for base64 image first (mobile compatibility)
+        image_base64 = request.data.get('image_base64')
+        mime_type = request.data.get('mime_type', 'image/jpeg')
+        
+        # Also check for FormData file upload
+        image_file = request.FILES.get('image')
+        
+        if not image_base64 and not image_file:
             return Response(
-                {'error': 'No image provided'},
+                {'error': 'No image provided. Send either image_base64 or image file.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        user = get_user_from_request(request)
-        
         try:
-            # Save the image query
-            image_query = ImageQuery.objects.create(
-                user=user,
-                image=image,
-                query_text=query_text
-            )
+            import tempfile
+            import os as temp_os
             
-            # Get the saved image path
-            image_path = image_query.image.path
+            temp_path = None
+            
+            if image_base64:
+                # Handle base64 image from mobile
+                try:
+                    # Decode base64
+                    import base64 as b64
+                    image_data = b64.b64decode(image_base64)
+                    
+                    # Determine file extension from mime type
+                    ext_map = {
+                        'image/jpeg': '.jpg',
+                        'image/jpg': '.jpg',
+                        'image/png': '.png',
+                        'image/gif': '.gif',
+                        'image/webp': '.webp',
+                    }
+                    ext = ext_map.get(mime_type.lower(), '.jpg')
+                    
+                    # Save to temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+                        tmp_file.write(image_data)
+                        temp_path = tmp_file.name
+                    
+                    print(f"Saved base64 image to: {temp_path} (size: {len(image_data)} bytes)")
+                    
+                    # Create ImageQuery record (without file, just track the query)
+                    image_query = ImageQuery.objects.create(
+                        user=user,
+                        query_text=query_text
+                    )
+                    
+                    # Use the temp file path for analysis
+                    image_path = temp_path
+                    
+                except Exception as decode_error:
+                    print(f"Error decoding base64 image: {decode_error}")
+                    return Response(
+                        {'error': f'Failed to decode base64 image: {str(decode_error)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                # Handle traditional file upload
+                image_query = ImageQuery.objects.create(
+                    user=user,
+                    image=image_file,
+                    query_text=query_text
+                )
+                image_path = image_query.image.path
             
             # Analyze image with Gemini Vision
             try:
                 from .ai_service import analyze_image_with_gemini
                 
                 result = analyze_image_with_gemini(image_path, query_text)
+                
+                # Check if Gemini returned a skip response (image not related to system prompt)
+                if result.get('skip', False):
+                    # Image is not related to college/education content - skip it
+                    image_query.ai_response = "Image not related to college/education content"
+                    image_query.confidence_score = 0.0
+                    image_query.save()
+                    
+                    # Clean up temp file if used
+                    if temp_path and temp_os.path.exists(temp_path):
+                        temp_os.unlink(temp_path)
+                    
+                    return Response({
+                        'message': 'Image not related to college/education content',
+                        'skipped': True,
+                        'ai_response': None,
+                        'confidence_score': 0.0,
+                        'image_query_id': image_query.id,
+                    }, status=status.HTTP_200_OK)
                 
                 ai_response = result.get('response', 'I received your image.')
                 confidence_score = result.get('confidence', 50.0)
@@ -516,16 +588,24 @@ class ImageQueryView(APIView):
             image_query.confidence_score = confidence_score
             image_query.save()
             
+            # Clean up temp file if used
+            if temp_path and temp_os.path.exists(temp_path):
+                temp_os.unlink(temp_path)
+            
             return Response({
                 'message': 'Image processed successfully',
                 'ai_response': ai_response,
                 'confidence_score': confidence_score,
                 'image_query_id': image_query.id,
-                'source': 'ai'
+                'source': 'ai',
+                'skipped': False
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
             print(f"Error processing image: {str(e)}")
+            # Clean up temp file if error
+            if 'temp_path' in locals() and temp_path and temp_os.path.exists(temp_path):
+                temp_os.unlink(temp_path)
             return Response(
                 {'error': f'Failed to process image: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

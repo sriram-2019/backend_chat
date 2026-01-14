@@ -93,19 +93,28 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings
-CORS_ALLOW_CREDENTIALS = True
-# When CORS_ALLOW_CREDENTIALS is True, you cannot use CORS_ALLOW_ALL_ORIGINS
-# Must specify exact origins
-CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:4000",  # Updated frontend port
-    "http://localhost:8000",  # Local backend
-    "http://127.0.0.1:8000",  # Local backend (IP)
-    "http://localhost:19006",  # Expo web development server
-    "https://chatbackend1.pythonanywhere.com",
-    # Add your production frontend URL here when deployed
-    # "https://your-frontend-domain.com",
+# Allow all origins for mobile app compatibility
+# Mobile apps (iOS/Android) don't send Origin headers like browsers
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = False  # Must be False when CORS_ALLOW_ALL_ORIGINS is True
+
+# Keep these for documentation/reference
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost:\d+$",
+    r"^http://127\.0\.0\.1:\d+$",
+]
+
+# Allow all headers for file uploads
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
 ]
 
 CSRF_TRUSTED_ORIGINS = [
