@@ -288,8 +288,8 @@ The user asks: {query_text}
 
 RULES:
 1. ONLY analyze images related to: syllabus, timetables, notes, textbooks, assignments, exam papers, academic documents, educational diagrams, college notices, or study materials.
-2. If the image is NOT related to education/college (like selfies, memes, random photos, personal images), politely decline and say: "I can only help with college and education-related images. Please upload study materials, notes, or academic documents."
-3. If it IS educational content, analyze it thoroughly and answer the user's question.
+2. If the image is NOT related to education/college (like selfies, memes, random photos, personal images, food, nature scenes, etc.), respond with ONLY the word "SKIP" (no other text).
+3. If it IS educational content, analyze it thoroughly and answer the user's question in detail.
 
 Examine the image and respond appropriately based on these rules."""
         else:
@@ -297,7 +297,7 @@ Examine the image and respond appropriately based on these rules."""
 
 RULES:
 1. ONLY analyze images related to: syllabus, timetables, notes, textbooks, assignments, exam papers, academic documents, educational diagrams, college notices, or study materials.
-2. If the image is NOT related to education/college (like selfies, memes, random photos, personal images), politely decline and say: "I can only help with college and education-related images. Please upload study materials, notes, or academic documents."
+2. If the image is NOT related to education/college (like selfies, memes, random photos, personal images, food, nature scenes, etc.), respond with ONLY the word "SKIP" (no other text).
 3. If it IS educational content:
    - Describe the academic content
    - Summarize key points if it's notes or a document
@@ -311,11 +311,22 @@ Examine the image and respond appropriately based on these rules."""
         
         response_text = response.text.strip() if response.text else "I could not analyze this image. Please try again."
         
+        # Check if Gemini returned "SKIP" (image not related to system prompt)
+        if response_text.upper().strip() == "SKIP":
+            return {
+                "response": None,  # No response - image not related
+                "confidence": 0.0,
+                "success": False,
+                "error": "Image not related to college/education content",
+                "skip": True  # Flag to indicate skip
+            }
+        
         return {
             "response": response_text,
             "confidence": 85.0,  # Vision model confidence
             "success": True,
-            "error": None
+            "error": None,
+            "skip": False
         }
         
     except ImportError:
