@@ -7,7 +7,12 @@ from .views import (
     ChatHistoryView,
     ChatMessageView,
     FeedbackView,
-    SavedAnswersView
+    SavedAnswersView,
+    UserSettingsView,
+    SearchView,
+    ImageQueryView,
+    NotificationView,
+    VoiceToTextView
 )
 from .admin_views import (
     AdminRegisterView,
@@ -27,7 +32,15 @@ from .admin_views import (
     ExamInformationDetailView,
     KnowledgeBaseView,
     KnowledgeBaseDetailView,
-    KnowledgeBaseApproveView
+    KnowledgeBaseApproveView,
+    SuperAdminDashboardView,
+    SuperAdminPendingRequestsView,
+    SuperAdminApproveRequestView,
+    SuperAdminRejectRequestView,
+    SuperAdminManageUserView,
+    SuperAdminActivityLogsView,
+    SuperAdminSystemAnalyticsView,
+    SuperAdminAssignRoleView
 )
 
 urlpatterns = [
@@ -38,6 +51,21 @@ urlpatterns = [
     
     # User Profile
     path('profile/', UserProfileView.as_view(), name='profile'),
+    
+    # User Settings (Dark Mode, Notifications, etc.)
+    path('settings/', UserSettingsView.as_view(), name='user-settings'),
+    
+    # Search
+    path('search/', SearchView.as_view(), name='search'),
+    
+    # Image Query
+    path('image-query/', ImageQueryView.as_view(), name='image-query'),
+    
+    # Voice to Text
+    path('voice-to-text/', VoiceToTextView.as_view(), name='voice-to-text'),
+    
+    # Notifications
+    path('notifications/', NotificationView.as_view(), name='notifications'),
     
     # Chat
     path('chat/message/', ChatMessageView.as_view(), name='chat-message'),
@@ -80,5 +108,14 @@ urlpatterns = [
     path('admin/knowledge-base/', KnowledgeBaseView.as_view(), name='admin-knowledge-base'),
     path('admin/knowledge-base/<int:kb_id>/', KnowledgeBaseDetailView.as_view(), name='admin-knowledge-base-detail'),
     path('admin/knowledge-base/<int:kb_id>/approve/', KnowledgeBaseApproveView.as_view(), name='admin-knowledge-base-approve'),
+    
+    # Super Admin Routes
+    path('super-admin/dashboard/', SuperAdminDashboardView.as_view(), name='super-admin-dashboard'),
+    path('super-admin/pending-requests/', SuperAdminPendingRequestsView.as_view(), name='super-admin-pending-requests'),
+    path('super-admin/approve-request/<int:admin_id>/', SuperAdminApproveRequestView.as_view(), name='super-admin-approve-request'),
+    path('super-admin/reject-request/<int:admin_id>/', SuperAdminRejectRequestView.as_view(), name='super-admin-reject-request'),
+    path('super-admin/manage-user/<int:user_id>/', SuperAdminManageUserView.as_view(), name='super-admin-manage-user'),
+    path('super-admin/activity-logs/', SuperAdminActivityLogsView.as_view(), name='super-admin-activity-logs'),
+    path('super-admin/system-analytics/', SuperAdminSystemAnalyticsView.as_view(), name='super-admin-system-analytics'),
+    path('super-admin/assign-role/<int:admin_id>/', SuperAdminAssignRoleView.as_view(), name='super-admin-assign-role'),
 ]
-

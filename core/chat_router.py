@@ -2,15 +2,24 @@
 Chat Router - Main entry point for chat responses
 Minimizes Gemini usage by prioritizing KB matching.
 """
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from .kb_matcher import match_kb_entry
 from .kb_cache import get_kb_cache, rebuild_kb_cache
 
 
-def chat_reply(user_text: str, user=None) -> Tuple[str, str]:
+def chat_reply(user_text: str, user=None, return_details: bool = False) -> Union[Tuple[str, str], Tuple[str, str, float, dict]]:
     """
     Main entry point for chat responses.
-    Returns: (response_text, intent_source)
+    
+    Args:
+        user_text: The user's message
+        user: The user object (optional)
+        return_details: If True, returns (response_text, intent_source, confidence_score, source_details)
+                       If False, returns (response_text, intent_source) for backward compatibility
+    
+    Returns: 
+        If return_details=False: (response_text, intent_source)
+        If return_details=True: (response_text, intent_source, confidence_score, source_details)
     
     Intent sources:
     - 'kb_match': Found in Knowledge Base
@@ -18,6 +27,8 @@ def chat_reply(user_text: str, user=None) -> Tuple[str, str]:
     - 'error': Error occurred
     """
     if not user_text or not user_text.strip():
+        if return_details:
+            return "Please provide a question.", "error", 0.0, {}
         return "Please provide a question.", "error"
     
     user_text = user_text.strip()
@@ -27,27 +38,61 @@ def chat_reply(user_text: str, user=None) -> Tuple[str, str]:
     
     if kb_match:
         entry, score = kb_match
-        confidence = 'HIGH' if score >= 0.7 else 'MEDIUM'
+        confidence_label = 'HIGH' if score >= 0.7 else 'MEDIUM'
         
-        print(f"[API] Using KB Database (NO API call) - KB_ID={entry['id']}, Score={score:.2f}, Confidence={confidence}")
-        print(f"KB Match: KB_ID={entry['id']}, Score={score:.2f}, Confidence={confidence}, Question='{entry['question'][:50]}...'")
+        # Convert score to percentage (0-100)
+        confidence_score = min(score * 100, 100.0)
         
+        source_details = {
+            "kb_id": entry['id'],
+            "matched_question": entry['question'][:100] + "..." if len(entry['question']) > 100 else entry['question'],
+            "match_score": score,
+            "confidence_label": confidence_label,
+            "source_type": "knowledge_base"
+        }
+        
+        print(f"[API] Using KB Database (NO API call) - KB_ID={entry['id']}, Score={score:.2f}, Confidence={confidence_label}")
+        print(f"KB Match: KB_ID={entry['id']}, Score={score:.2f}, Confidence={confidence_label}, Question='{entry['question'][:50]}...'")
+        
+        if return_details:
+            return entry['answer'], 'kb_match', confidence_score, source_details
         return entry['answer'], 'kb_match'
     
     # STEP 2: No KB match found - use Gemini as fallback
     # Only for general questions, explanations, or when KB doesn't have answer
     try:
-        from .ai_service import get_gemini_response
+        from .ai_service import get_gemini_response, classify_intent
+        
+        # Classify intent to determine if it's college-specific or general
+        intent_result = classify_intent(user_text)
+        intent_type = intent_result.get("intent_type", "GENERAL")
+        confidence = intent_result.get("confidence", "MEDIUM")
+        
+        # Set is_college_context based on intent classification
+        is_college_context = (intent_type == "COLLEGE_SPECIFIC")
         
         print(f"[API] Using Gemini API (fallback - no KB match found)")
+        print(f"[INTENT] Classified as: {intent_type} (confidence: {confidence})")
         
-        # Use Gemini with college context
+        # Use Gemini with appropriate context based on intent
         response_text = get_gemini_response(
             user_text=user_text,
             user=user,
-            is_college_context=True
+            is_college_context=is_college_context
         )
         
+        # AI responses get lower confidence since they're not from verified KB
+        confidence_score = 60.0 if confidence == "HIGH" else 50.0 if confidence == "MEDIUM" else 40.0
+        
+        source_details = {
+            "intent_type": intent_type,
+            "intent_confidence": confidence,
+            "source_type": "ai_generated",
+            "is_college_context": is_college_context
+        }
+        
+        if return_details:
+            return response_text, 'ai_fallback', confidence_score, source_details
         return response_text, 'ai_fallback'
         
     except Exception as e:

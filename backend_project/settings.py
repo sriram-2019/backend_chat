@@ -12,7 +12,6 @@ DEBUG = True
 # Allow all hosts for development, but explicitly include PythonAnywhere domain
 ALLOWED_HOSTS = [
     'localhost',
-    '127.0.0.1',
     'chatbackend1.pythonanywhere.com',
     '*',  # Fallback for development
 ]
@@ -100,7 +99,10 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
+    "http://localhost:4000",  # Updated frontend port
+    "http://localhost:8000",  # Local backend
+    "http://127.0.0.1:8000",  # Local backend (IP)
+    "http://localhost:19006",  # Expo web development server
     "https://chatbackend1.pythonanywhere.com",
     # Add your production frontend URL here when deployed
     # "https://your-frontend-domain.com",
@@ -108,8 +110,8 @@ CORS_ALLOWED_ORIGINS = [
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:8000",
+    "http://localhost:4000",  # Updated frontend port
+    "http://localhost:19006",  # Expo web development server
     "https://chatbackend1.pythonanywhere.com",
 ]
 

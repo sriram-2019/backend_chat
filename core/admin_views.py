@@ -10,13 +10,15 @@ from datetime import datetime, timedelta
 from .models import (
     AdminProfile, UnsolvedQuestion, Document, Analytics,
     ChatHistory, Feedback, KnowledgeBase, StudentProfile,
-    Rule, Syllabus, ExamInformation
+    Rule, Syllabus, ExamInformation, AdminActivityLog,
+    Notification, SystemReport, User
 )
 from .serializers import (
     AdminProfileSerializer, UnsolvedQuestionSerializer,
     DocumentSerializer, AnalyticsSerializer,
     RuleSerializer, SyllabusSerializer, ExamInformationSerializer,
-    KnowledgeBaseSerializer
+    KnowledgeBaseSerializer, AdminActivityLogSerializer,
+    NotificationSerializer, SystemReportSerializer
 )
 
 def is_admin(user, check_authenticated=False):
@@ -30,6 +32,37 @@ def is_admin(user, check_authenticated=False):
         return AdminProfile.objects.filter(user=user).exists() or user.is_staff
     except:
         return False
+
+def is_super_admin(user):
+    """Check if user is a super admin (has AdminProfile with role='super_admin' OR is_superuser)"""
+    if not user:
+        return False
+    try:
+        # Check if user is Django superuser
+        if user.is_superuser:
+            return True
+        # Check if user has AdminProfile with super_admin role
+        admin_profile = AdminProfile.objects.filter(user=user).first()
+        if admin_profile and admin_profile.role == 'super_admin':
+            return True
+        return False
+    except:
+        return False
+
+def log_admin_activity(admin, action, target_type, target_id=None, target_title=None, details=None, ip_address=None):
+    """Helper function to log admin activities"""
+    try:
+        AdminActivityLog.objects.create(
+            admin=admin,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            target_title=target_title,
+            details=details or {},
+            ip_address=ip_address
+        )
+    except Exception as e:
+        print(f"Error logging admin activity: {str(e)}")
 
 def get_admin_user(request):
     """Get admin user from request (session) or from user_id parameter"""
@@ -132,51 +165,81 @@ class AdminLoginView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         email = request.data.get('email')
         password = request.data.get('password')
         
         if not email or not password:
+            logger.warning(f"Admin login attempt with missing credentials")
             return Response(
                 {"error": "Email and password are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        logger.info(f"Admin login attempt for email: {email}")
+        
         try:
             user = User.objects.get(email=email)
+            logger.info(f"User found: {user.username} (ID: {user.id})")
         except User.DoesNotExist:
+            logger.warning(f"Admin login failed: User with email {email} does not exist")
             return Response(
                 {"error": "Invalid email or password"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
+        except Exception as e:
+            logger.error(f"Error looking up user: {str(e)}")
+            return Response(
+                {"error": "An error occurred during login"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
         # Check if user is admin - don't check session yet as we're logging in
-        if not is_admin(user, check_authenticated=False):
+        is_admin_user = is_admin(user, check_authenticated=False)
+        logger.info(f"User {user.username} is_admin check: {is_admin_user}")
+        
+        if not is_admin_user:
+            logger.warning(f"Admin login denied: User {user.username} is not an admin")
             return Response(
                 {"error": "Access denied. Admin account required."},
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        user = authenticate(username=user.username, password=password)
-        if not user:
+        # Authenticate password
+        authenticated_user = authenticate(username=user.username, password=password)
+        if not authenticated_user:
+            logger.warning(f"Admin login failed: Invalid password for user {user.username}")
             return Response(
                 {"error": "Invalid email or password"},
                 status=status.HTTP_401_UNAUTHORIZED
             )
         
-        login(request, user)
+        # Login the user (creates session)
+        try:
+            login(request, authenticated_user)
+            logger.info(f"Admin login successful: {authenticated_user.username} (ID: {authenticated_user.id})")
+        except Exception as e:
+            logger.error(f"Error during login: {str(e)}")
+            return Response(
+                {"error": "An error occurred during login"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
         
         try:
-            profile = AdminProfile.objects.get(user=user)
+            profile = AdminProfile.objects.get(user=authenticated_user)
             profile_data = AdminProfileSerializer(profile).data
         except AdminProfile.DoesNotExist:
             profile_data = None
+            logger.info(f"No AdminProfile found for user {authenticated_user.username}, but user is staff")
         
         return Response({
             "message": "Login successful",
             "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
+                "id": authenticated_user.id,
+                "username": authenticated_user.username,
+                "email": authenticated_user.email,
                 "is_admin": True
             },
             "profile": profile_data
@@ -456,6 +519,30 @@ class DocumentsView(APIView):
         }
         kb_type = kb_type_map.get(doc_type, 'general')
         
+        # Set visibility and target departments
+        visibility = request.data.get('visibility', 'public')
+        target_departments = request.data.get('target_departments', [])
+        target_user_groups = request.data.get('target_user_groups', [])
+        
+        if isinstance(target_departments, str):
+            import json
+            try:
+                target_departments = json.loads(target_departments)
+            except:
+                target_departments = [target_departments] if target_departments else []
+        
+        if isinstance(target_user_groups, str):
+            import json
+            try:
+                target_user_groups = json.loads(target_user_groups)
+            except:
+                target_user_groups = [target_user_groups] if target_user_groups else []
+        
+        document.visibility = visibility
+        document.target_departments = target_departments
+        document.target_user_groups = target_user_groups
+        document.save()
+        
         # Add extracted text to Knowledge Base
         kb_entry = KnowledgeBase.objects.create(
             question=f"Document: {document.title}",
@@ -466,6 +553,60 @@ class DocumentsView(APIView):
             approved_by=user,
             approved_at=timezone.now()
         )
+        
+        # Log admin activity
+        log_admin_activity(
+            admin=user,
+            action='upload',
+            target_type='document',
+            target_id=document.id,
+            target_title=document.title,
+            details={
+                'document_type': document.document_type,
+                'file_name': document.file_name,
+                'visibility': visibility,
+                'target_departments': target_departments
+            },
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
+        
+        # Send push notifications to relevant department users
+        try:
+            # Get users from target departments
+            target_users = []
+            if visibility == 'department' and target_departments:
+                # Get students from target departments
+                students = StudentProfile.objects.filter(course__in=target_departments)
+                target_users = [student.user for student in students]
+            elif visibility == 'public':
+                # Notify all active users
+                target_users = list(User.objects.filter(is_active=True))
+            
+            # Create notifications for target users
+            notification_title = f"New Document: {document.title}"
+            notification_message = f"A new {document.document_type} document has been uploaded."
+            
+            for target_user in target_users:
+                # Check if user has push notifications enabled (from UserSettings)
+                try:
+                    from .models import UserSettings
+                    settings = UserSettings.objects.get(user=target_user)
+                    if not settings.push_notifications_enabled:
+                        continue
+                except:
+                    pass  # Default to sending if no settings found
+                
+                Notification.objects.create(
+                    user=target_user,
+                    title=notification_title,
+                    message=notification_message,
+                    notification_type='document',
+                    metadata={'document_id': document.id, 'document_type': document.document_type},
+                    sent_by=user
+                )
+        except Exception as e:
+            print(f"Error sending notifications: {str(e)}")
+            # Don't fail the upload if notifications fail
         
         return Response({
             'document': DocumentSerializer(document).data,
@@ -544,7 +685,26 @@ class AdminListView(APIView):
     def get(self, request):
         """Get all admin users - accessible for authenticated admins"""
         user = get_admin_user(request)
+        
+        # If no user from get_admin_user, check if user_id was provided
         if not user:
+            user_id = request.query_params.get('user_id')
+            if user_id:
+                try:
+                    user_obj = User.objects.get(id=user_id)
+                    # Check if this user is an admin
+                    if is_admin(user_obj):
+                        user = user_obj
+                    else:
+                        return Response(
+                            {"error": "Admin access required"},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except (User.DoesNotExist, ValueError, TypeError):
+                    pass
+        
+        # Final check - user must be admin
+        if not user or not is_admin(user):
             return Response(
                 {"error": "Admin access required"},
                 status=status.HTTP_403_FORBIDDEN
@@ -1094,3 +1254,368 @@ class AdminCollegeDataView(APIView):
             )
             
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# ==================== SUPER ADMIN ENDPOINTS ====================
+
+def get_super_admin_user(request):
+    """Get super admin user from request"""
+    user = get_admin_user(request)
+    if user and is_super_admin(user):
+        return user
+    return None
+
+class SuperAdminDashboardView(APIView):
+    """Super Admin Dashboard with system-wide analytics"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # System-wide statistics
+        total_users = User.objects.count()
+        total_students = StudentProfile.objects.count()
+        total_admins = AdminProfile.objects.count()
+        pending_admin_requests = AdminProfile.objects.filter(approval_status='pending').count()
+        active_admins = AdminProfile.objects.filter(is_active=True, approval_status='approved').count()
+        total_questions = ChatHistory.objects.filter(sender='user').count()
+        total_unsolved = UnsolvedQuestion.objects.filter(status='pending').count()
+        total_documents = Document.objects.count()
+        total_kb_entries = KnowledgeBase.objects.count()
+        kb_matches = ChatHistory.objects.filter(intent='kb_match').count()
+        ai_fallbacks = ChatHistory.objects.filter(intent='ai_fallback').count()
+        
+        # Recent admin activities
+        recent_activities = AdminActivityLog.objects.all().order_by('-timestamp')[:10]
+        
+        # Department-wise statistics
+        departments = {}
+        for admin in AdminProfile.objects.filter(approval_status='approved', is_active=True):
+            dept = admin.department or 'Unassigned'
+            if dept not in departments:
+                departments[dept] = {'admins': 0, 'documents': 0}
+            departments[dept]['admins'] += 1
+        
+        for doc in Document.objects.all():
+            dept = doc.uploaded_by.admin_profile.department if hasattr(doc.uploaded_by, 'admin_profile') and doc.uploaded_by.admin_profile else 'Unassigned'
+            if dept not in departments:
+                departments[dept] = {'admins': 0, 'documents': 0}
+            departments[dept]['documents'] += 1
+        
+        return Response({
+            "stats": {
+                "total_users": total_users,
+                "total_students": total_students,
+                "total_admins": total_admins,
+                "pending_admin_requests": pending_admin_requests,
+                "active_admins": active_admins,
+                "total_questions": total_questions,
+                "total_unsolved": total_unsolved,
+                "total_documents": total_documents,
+                "total_kb_entries": total_kb_entries,
+                "kb_matches": kb_matches,
+                "ai_fallbacks": ai_fallbacks,
+                "kb_match_rate": round((kb_matches / total_questions * 100) if total_questions > 0 else 0, 2)
+            },
+            "departments": departments,
+            "recent_activities": AdminActivityLogSerializer(recent_activities, many=True).data
+        }, status=status.HTTP_200_OK)
+
+class SuperAdminPendingRequestsView(APIView):
+    """Get pending admin registration requests"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        pending_requests = AdminProfile.objects.filter(approval_status='pending').order_by('-created_at')
+        serializer = AdminProfileSerializer(pending_requests, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class SuperAdminApproveRequestView(APIView):
+    """Approve admin registration request"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request, admin_id):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            admin_profile = AdminProfile.objects.get(id=admin_id)
+            admin_profile.approval_status = 'approved'
+            admin_profile.approved_by = user
+            admin_profile.approved_at = timezone.now()
+            admin_profile.is_active = True
+            admin_profile.save()
+            
+            # Log activity
+            log_admin_activity(
+                admin=user,
+                action='approve',
+                target_type='admin',
+                target_id=admin_profile.id,
+                target_title=f"{admin_profile.full_name} ({admin_profile.email})",
+                ip_address=request.META.get('REMOTE_ADDR')
+            )
+            
+            serializer = AdminProfileSerializer(admin_profile)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except AdminProfile.DoesNotExist:
+            return Response(
+                {"error": "Admin profile not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class SuperAdminRejectRequestView(APIView):
+    """Reject admin registration request"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request, admin_id):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            admin_profile = AdminProfile.objects.get(id=admin_id)
+            admin_profile.approval_status = 'rejected'
+            admin_profile.approved_by = user
+            admin_profile.rejection_reason = request.data.get('rejection_reason', 'Request rejected by Super Admin')
+            admin_profile.is_active = False
+            admin_profile.save()
+            
+            # Log activity
+            log_admin_activity(
+                admin=user,
+                action='reject',
+                target_type='admin',
+                target_id=admin_profile.id,
+                target_title=f"{admin_profile.full_name} ({admin_profile.email})",
+                details={'rejection_reason': admin_profile.rejection_reason},
+                ip_address=request.META.get('REMOTE_ADDR')
+            )
+            
+            serializer = AdminProfileSerializer(admin_profile)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except AdminProfile.DoesNotExist:
+            return Response(
+                {"error": "Admin profile not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class SuperAdminManageUserView(APIView):
+    """Activate/Deactivate users and admins"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request, user_id):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            target_user = User.objects.get(id=user_id)
+            action = request.data.get('action', 'activate')  # 'activate' or 'deactivate'
+            
+            if action == 'activate':
+                target_user.is_active = True
+                # If user has admin profile, activate it too
+                try:
+                    admin_profile = AdminProfile.objects.get(user=target_user)
+                    admin_profile.is_active = True
+                    admin_profile.save()
+                except AdminProfile.DoesNotExist:
+                    pass
+            elif action == 'deactivate':
+                target_user.is_active = False
+                # If user has admin profile, deactivate it too
+                try:
+                    admin_profile = AdminProfile.objects.get(user=target_user)
+                    admin_profile.is_active = False
+                    admin_profile.save()
+                except AdminProfile.DoesNotExist:
+                    pass
+            else:
+                return Response(
+                    {"error": "Invalid action. Use 'activate' or 'deactivate'"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            target_user.save()
+            
+            # Log activity
+            log_admin_activity(
+                admin=user,
+                action=action,
+                target_type='user',
+                target_id=target_user.id,
+                target_title=f"{target_user.username} ({target_user.email})",
+                ip_address=request.META.get('REMOTE_ADDR')
+            )
+            
+            return Response({
+                "message": f"User {action}d successfully",
+                "user": {
+                    "id": target_user.id,
+                    "username": target_user.username,
+                    "email": target_user.email,
+                    "is_active": target_user.is_active
+                }
+            }, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+class SuperAdminActivityLogsView(APIView):
+    """View admin activity logs"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Filter options
+        admin_id = request.query_params.get('admin_id')
+        action = request.query_params.get('action')
+        target_type = request.query_params.get('target_type')
+        days = int(request.query_params.get('days', 30))
+        
+        start_date = timezone.now() - timedelta(days=days)
+        logs = AdminActivityLog.objects.filter(timestamp__gte=start_date)
+        
+        if admin_id:
+            logs = logs.filter(admin_id=admin_id)
+        if action:
+            logs = logs.filter(action=action)
+        if target_type:
+            logs = logs.filter(target_type=target_type)
+        
+        logs = logs.order_by('-timestamp')[:100]  # Limit to 100 most recent
+        serializer = AdminActivityLogSerializer(logs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+class SuperAdminSystemAnalyticsView(APIView):
+    """System-wide analytics for Super Admin"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        days = int(request.query_params.get('days', 30))
+        end_date = timezone.now().date()
+        start_date = end_date - timedelta(days=days)
+        
+        # AI usage statistics
+        chats = ChatHistory.objects.filter(timestamp__date__gte=start_date, timestamp__date__lte=end_date)
+        total_ai_queries = chats.filter(intent='ai_fallback').count()
+        total_kb_queries = chats.filter(intent='kb_match').count()
+        
+        # Admin activity statistics
+        activities = AdminActivityLog.objects.filter(timestamp__date__gte=start_date, timestamp__date__lte=end_date)
+        uploads_count = activities.filter(action='upload').count()
+        updates_count = activities.filter(action='update').count()
+        
+        # System performance metrics
+        total_users_active = User.objects.filter(is_active=True).count()
+        total_admins_active = AdminProfile.objects.filter(is_active=True, approval_status='approved').count()
+        
+        return Response({
+            "period": {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "days": days
+            },
+            "ai_usage": {
+                "total_ai_queries": total_ai_queries,
+                "total_kb_queries": total_kb_queries,
+                "total_queries": chats.count(),
+                "kb_match_rate": round((total_kb_queries / chats.count() * 100) if chats.count() > 0 else 0, 2),
+                "ai_fallback_rate": round((total_ai_queries / chats.count() * 100) if chats.count() > 0 else 0, 2)
+            },
+            "admin_activity": {
+                "uploads": uploads_count,
+                "updates": updates_count,
+                "total_activities": activities.count()
+            },
+            "system_performance": {
+                "active_users": total_users_active,
+                "active_admins": total_admins_active,
+                "total_documents": Document.objects.count(),
+                "total_kb_entries": KnowledgeBase.objects.count()
+            }
+        }, status=status.HTTP_200_OK)
+
+class SuperAdminAssignRoleView(APIView):
+    """Assign role-based access control for admins"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request, admin_id):
+        user = get_super_admin_user(request)
+        if not user:
+            return Response(
+                {"error": "Super Admin access required"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            admin_profile = AdminProfile.objects.get(id=admin_id)
+            new_role = request.data.get('role')
+            permissions = request.data.get('permissions', {})
+            
+            if new_role not in ['department_admin', 'super_admin']:
+                return Response(
+                    {"error": "Invalid role. Must be 'department_admin' or 'super_admin'"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            admin_profile.role = new_role
+            admin_profile.permissions = permissions
+            admin_profile.save()
+            
+            # Log activity
+            log_admin_activity(
+                admin=user,
+                action='update',
+                target_type='admin',
+                target_id=admin_profile.id,
+                target_title=f"{admin_profile.full_name} - Role changed to {new_role}",
+                details={'role': new_role, 'permissions': permissions},
+                ip_address=request.META.get('REMOTE_ADDR')
+            )
+            
+            serializer = AdminProfileSerializer(admin_profile)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except AdminProfile.DoesNotExist:
+            return Response(
+                {"error": "Admin profile not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )

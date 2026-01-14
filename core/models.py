@@ -80,6 +80,8 @@ class ChatHistory(models.Model):
     response = models.TextField(blank=True, null=True)
     sender = models.CharField(max_length=20, choices=SENDER_CHOICES, default='user')
     intent = models.CharField(max_length=20, choices=INTENT_CHOICES, blank=True, null=True, help_text='Response intent/source')
+    confidence_score = models.FloatField(default=0.0, help_text='Response confidence score (0-100)')
+    source_details = models.JSONField(default=dict, blank=True, help_text='Details about response source (KB ID, matching score, etc.)')
     timestamp = models.DateTimeField(auto_now_add=True)
     session_id = models.CharField(max_length=100, blank=True, null=True, help_text='To group messages in a conversation')
     is_saved = models.BooleanField(default=False, help_text='Whether this answer is saved by user')
@@ -113,12 +115,30 @@ class Feedback(models.Model):
 
 class AdminProfile(models.Model):
     """Admin user profile"""
+    APPROVAL_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    ROLE_CHOICES = [
+        ('department_admin', 'Department Admin'),
+        ('super_admin', 'Super Admin'),
+    ]
+    
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='admin_profile')
     full_name = models.CharField(max_length=200)
     email = models.EmailField(unique=True)
     prof_id = models.CharField(max_length=50, unique=True, blank=True, null=True, verbose_name='Professor ID')
     phone = models.CharField(max_length=15, blank=True, null=True)
     department = models.CharField(max_length=100, blank=True, null=True)
+    role = models.CharField(max_length=50, choices=ROLE_CHOICES, default='department_admin')
+    approval_status = models.CharField(max_length=20, choices=APPROVAL_STATUS_CHOICES, default='pending')
+    approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_admin_profiles')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(blank=True, null=True)
+    permissions = models.JSONField(default=dict, blank=True, help_text='Role-based permissions')
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -162,6 +182,12 @@ class Document(models.Model):
         ('other', 'Other'),
     ]
     
+    VISIBILITY_CHOICES = [
+        ('public', 'Public - All Users'),
+        ('department', 'Department Only'),
+        ('private', 'Private - Admin Only'),
+    ]
+    
     title = models.CharField(max_length=200)
     document_type = models.CharField(max_length=50, choices=DOCUMENT_TYPES)
     file_path = models.CharField(max_length=500, help_text='Path to uploaded file')
@@ -171,6 +197,9 @@ class Document(models.Model):
     uploaded_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='uploaded_documents')
     extracted_text = models.TextField(blank=True, null=True, help_text='Text extracted from document for chatbot')
     metadata = models.JSONField(default=dict, blank=True, help_text='Additional metadata')
+    visibility = models.CharField(max_length=20, choices=VISIBILITY_CHOICES, default='public')
+    target_departments = models.JSONField(default=list, blank=True, help_text='List of department names for department visibility')
+    target_user_groups = models.JSONField(default=list, blank=True, help_text='Specific user groups who can access')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -320,3 +349,143 @@ class ExamInformation(models.Model):
     
     def __str__(self):
         return f"{self.exam_name} - {self.course} (Sem {self.semester})"
+
+
+class UserSettings(models.Model):
+    """User settings including dark mode and notification preferences"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='settings')
+    dark_mode = models.BooleanField(default=False)
+    push_notifications_enabled = models.BooleanField(default=True)
+    voice_enabled = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'User Settings'
+        verbose_name_plural = 'User Settings'
+    
+    def __str__(self):
+        return f"Settings for {self.user.username}"
+
+
+class ImageQuery(models.Model):
+    """Image queries with AI-based responses"""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='image_queries', null=True, blank=True)
+    image = models.ImageField(upload_to='image_queries/')
+    query_text = models.TextField(blank=True, null=True, help_text='Optional text query about the image')
+    ai_response = models.TextField(blank=True, null=True)
+    confidence_score = models.FloatField(default=0.0, help_text='AI confidence score (0-100)')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Image Query'
+        verbose_name_plural = 'Image Queries'
+    
+    def __str__(self):
+        username = self.user.username if self.user else 'Anonymous'
+        return f"Image query by {username} at {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class AdminActivityLog(models.Model):
+    """Track admin activities for monitoring"""
+    ACTION_CHOICES = [
+        ('login', 'Login'),
+        ('logout', 'Logout'),
+        ('upload', 'Document Upload'),
+        ('update', 'Update'),
+        ('delete', 'Delete'),
+        ('create', 'Create'),
+        ('approve', 'Approve'),
+        ('reject', 'Reject'),
+        ('notification', 'Send Notification'),
+    ]
+    
+    TARGET_TYPE_CHOICES = [
+        ('document', 'Document'),
+        ('kb_entry', 'Knowledge Base Entry'),
+        ('user', 'User'),
+        ('admin', 'Admin'),
+        ('rule', 'Rule'),
+        ('syllabus', 'Syllabus'),
+        ('exam', 'Exam Information'),
+        ('notification', 'Notification'),
+    ]
+    
+    admin = models.ForeignKey(User, on_delete=models.CASCADE, related_name='activity_logs')
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
+    target_type = models.CharField(max_length=50, choices=TARGET_TYPE_CHOICES)
+    target_id = models.IntegerField(null=True, blank=True)
+    target_title = models.CharField(max_length=255, blank=True, null=True, help_text='Human readable title of target')
+    details = models.JSONField(default=dict, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-timestamp']
+        verbose_name = 'Admin Activity Log'
+        verbose_name_plural = 'Admin Activity Logs'
+    
+    def __str__(self):
+        return f"{self.admin.username} - {self.action} - {self.target_type} at {self.timestamp.strftime('%Y-%m-%d %H:%M')}"
+
+
+class Notification(models.Model):
+    """Push notifications for users"""
+    NOTIFICATION_TYPES = [
+        ('document', 'New Document'),
+        ('announcement', 'Announcement'),
+        ('update', 'Content Update'),
+        ('system', 'System Notification'),
+        ('reminder', 'Reminder'),
+    ]
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
+    title = models.CharField(max_length=200)
+    message = models.TextField()
+    notification_type = models.CharField(max_length=50, choices=NOTIFICATION_TYPES, default='announcement')
+    is_read = models.BooleanField(default=False)
+    metadata = models.JSONField(default=dict, blank=True, help_text='Additional data like document ID, link, etc.')
+    sent_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='sent_notifications')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Notification'
+        verbose_name_plural = 'Notifications'
+    
+    def __str__(self):
+        return f"Notification to {self.user.username}: {self.title}"
+
+
+class SystemReport(models.Model):
+    """Generated system reports for download"""
+    REPORT_TYPES = [
+        ('user_activity', 'User Activity Report'),
+        ('admin_activity', 'Admin Activity Report'),
+        ('ai_usage', 'AI Usage Report'),
+        ('system_performance', 'System Performance Report'),
+        ('analytics', 'Analytics Report'),
+    ]
+    
+    FORMAT_CHOICES = [
+        ('pdf', 'PDF'),
+        ('csv', 'CSV'),
+        ('excel', 'Excel'),
+    ]
+    
+    report_type = models.CharField(max_length=50, choices=REPORT_TYPES)
+    report_format = models.CharField(max_length=10, choices=FORMAT_CHOICES, default='pdf')
+    file_path = models.CharField(max_length=500)
+    file_name = models.CharField(max_length=255)
+    generated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='generated_reports')
+    parameters = models.JSONField(default=dict, blank=True, help_text='Report generation parameters')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'System Report'
+        verbose_name_plural = 'System Reports'
+    
+    def __str__(self):
+        return f"{self.get_report_type_display()} - {self.created_at.strftime('%Y-%m-%d')}"
