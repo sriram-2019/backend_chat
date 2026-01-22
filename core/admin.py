@@ -1,6 +1,8 @@
 from django.contrib import admin
+# Admin configuration
+
 from .models import (
-    StudentProfile, ChatHistory, Feedback, KnowledgeBase,
+    StudentProfile, ChatHistory, KnowledgeBase,
     AdminProfile, UnsolvedQuestion, Document, Analytics
 )
 
@@ -25,16 +27,12 @@ class KnowledgeBaseAdmin(admin.ModelAdmin):
 
 @admin.register(ChatHistory)
 class ChatHistoryAdmin(admin.ModelAdmin):
-    list_display = ['user', 'message', 'sender', 'intent', 'timestamp', 'is_saved']
-    list_filter = ['sender', 'intent', 'is_saved', 'timestamp']
+    list_display = ['user', 'message', 'sender', 'intent', 'timestamp', 'is_saved', 'is_helpful']
+    list_filter = ['sender', 'intent', 'is_saved', 'is_helpful', 'timestamp']
     search_fields = ['message', 'response', 'user__username']
     readonly_fields = ['timestamp']
 
-@admin.register(Feedback)
-class FeedbackAdmin(admin.ModelAdmin):
-    list_display = ['chat_history', 'user', 'rating', 'timestamp']
-    list_filter = ['rating', 'timestamp']
-    search_fields = ['comment', 'user__username']
+
 
 @admin.register(UnsolvedQuestion)
 class UnsolvedQuestionAdmin(admin.ModelAdmin):

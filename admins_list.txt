@@ -1,0 +1,15 @@
+Listing all AdminProfiles:
+ID: 1
+  Name: 'sriram '
+  Email: 'sriram@gmail.com'
+  User Email: 'sriram@gmail.com'
+  Username: 'sriram'
+  Role: 'super_admin'
+------------------------------
+ID: 2
+  Name: 'System Administrator'
+  Email: 'admin@gmail.com'
+  User Email: 'admin@gmail.com'
+  Username: 'admin'
+  Role: 'super_admin'
+------------------------------

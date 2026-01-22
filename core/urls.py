@@ -6,8 +6,14 @@ from .views import (
     UserProfileView,
     ChatHistoryView,
     ChatMessageView,
-    FeedbackView,
-    SavedAnswersView
+    ChatFeedbackView,
+
+    SavedAnswersView,
+    UserSettingsView,
+    SearchView,
+    ImageQueryView,
+    NotificationView,
+    VoiceToTextView
 )
 from .admin_views import (
     AdminRegisterView,
@@ -16,6 +22,7 @@ from .admin_views import (
     AnalyticsView,
     UnsolvedQuestionsView,
     DocumentsView,
+    DocumentDownloadView,
     AdminListView,
     StudentDetailView,
     AdminCollegeDataView,
@@ -27,7 +34,16 @@ from .admin_views import (
     ExamInformationDetailView,
     KnowledgeBaseView,
     KnowledgeBaseDetailView,
-    KnowledgeBaseApproveView
+    KnowledgeBaseApproveView,
+    SuperAdminDashboardView,
+    SuperAdminPendingRequestsView,
+    SuperAdminApproveRequestView,
+    SuperAdminRejectRequestView,
+    SuperAdminManageUserView,
+    SuperAdminActivityLogsView,
+    SuperAdminSystemAnalyticsView,
+    SuperAdminAssignRoleView,
+    SuperAdminUserListView
 )
 
 urlpatterns = [
@@ -39,12 +55,30 @@ urlpatterns = [
     # User Profile
     path('profile/', UserProfileView.as_view(), name='profile'),
     
+    # User Settings (Dark Mode, Notifications, etc.)
+    path('settings/', UserSettingsView.as_view(), name='user-settings'),
+    
+    # Search
+    path('search/', SearchView.as_view(), name='search'),
+    
+    # Image Query
+    path('image-query/', ImageQueryView.as_view(), name='image-query'),
+    
+    # Voice to Text
+    path('voice-to-text/', VoiceToTextView.as_view(), name='voice-to-text'),
+    
+    # Notifications
+    path('notifications/', NotificationView.as_view(), name='notifications'),
+    
     # Chat
     path('chat/message/', ChatMessageView.as_view(), name='chat-message'),
     path('chat/history/', ChatHistoryView.as_view(), name='chat-history'),
     
     # Feedback
-    path('feedback/', FeedbackView.as_view(), name='feedback'),
+    path('chat/feedback/', ChatFeedbackView.as_view(), name='chat-feedback'),
+
+
+
     
     # Saved Answers
     path('saved/', SavedAnswersView.as_view(), name='saved-answers'),
@@ -60,6 +94,7 @@ urlpatterns = [
     path('admin/analytics/', AnalyticsView.as_view(), name='admin-analytics'),
     path('admin/unsolved/', UnsolvedQuestionsView.as_view(), name='admin-unsolved'),
     path('admin/documents/', DocumentsView.as_view(), name='admin-documents'),
+    path('admin/documents/<int:doc_id>/download/', DocumentDownloadView.as_view(), name='admin-document-download'),
     path('admin/list/', AdminListView.as_view(), name='admin-list'),
     path('admin/student/<str:username>/', StudentDetailView.as_view(), name='admin-student-detail'),
     path('admin/college-data/', AdminCollegeDataView.as_view(), name='admin-college-data'),
@@ -80,5 +115,15 @@ urlpatterns = [
     path('admin/knowledge-base/', KnowledgeBaseView.as_view(), name='admin-knowledge-base'),
     path('admin/knowledge-base/<int:kb_id>/', KnowledgeBaseDetailView.as_view(), name='admin-knowledge-base-detail'),
     path('admin/knowledge-base/<int:kb_id>/approve/', KnowledgeBaseApproveView.as_view(), name='admin-knowledge-base-approve'),
+    
+    # Super Admin Routes
+    path('super-admin/dashboard/', SuperAdminDashboardView.as_view(), name='super-admin-dashboard'),
+    path('super-admin/pending-requests/', SuperAdminPendingRequestsView.as_view(), name='super-admin-pending-requests'),
+    path('super-admin/approve-request/<int:admin_id>/', SuperAdminApproveRequestView.as_view(), name='super-admin-approve-request'),
+    path('super-admin/reject-request/<int:admin_id>/', SuperAdminRejectRequestView.as_view(), name='super-admin-reject-request'),
+    path('super-admin/manage-user/<int:user_id>/', SuperAdminManageUserView.as_view(), name='super-admin-manage-user'),
+    path('super-admin/activity-logs/', SuperAdminActivityLogsView.as_view(), name='super-admin-activity-logs'),
+    path('super-admin/system-analytics/', SuperAdminSystemAnalyticsView.as_view(), name='super-admin-system-analytics'),
+    path('super-admin/assign-role/<int:admin_id>/', SuperAdminAssignRoleView.as_view(), name='super-admin-assign-role'),
+    path('super-admin/users/', SuperAdminUserListView.as_view(), name='super-admin-user-list'),
 ]
-

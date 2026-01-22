@@ -12,7 +12,7 @@ DEBUG = True
 # Allow all hosts for development, but explicitly include PythonAnywhere domain
 ALLOWED_HOSTS = [
     'localhost',
-    '127.0.0.1',
+    'chatbackend1.pythonanywhere.com',
     '*',  # Fallback for development
 ]
 
@@ -93,21 +93,50 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings
+# Allow all origins for mobile app compatibility
+# Mobile apps (iOS/Android) don't send Origin headers like browsers
+<<<<<<< HEAD
+# CORS Settings
+# We must allow credentials for Session Authentication to work (cookies)
 CORS_ALLOW_CREDENTIALS = True
-# When CORS_ALLOW_CREDENTIALS is True, you cannot use CORS_ALLOW_ALL_ORIGINS
-# Must specify exact origins
-CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    # Add your production frontend URL here when deployed
-    # "https://your-frontend-domain.com",
+CORS_ALLOW_ALL_ORIGINS = False  # Cannot be True if ALLOW_CREDENTIALS is True
+
+# Allow all origins via Regex to support mobile apps and credentials
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^.*$",  # DANGEROUS IN PRODUCTION but needed for mobile app generic origins
+=======
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = False  # Must be False when CORS_ALLOW_ALL_ORIGINS is True
+
+# Keep these for documentation/reference
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost:\d+$",
+    r"^http://127\.0\.0\.1:\d+$",
+>>>>>>> a3b2c40b87ec39d93fdf4e0dc7b1cfe82a990382
+]
+
+# Allow all headers for file uploads
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+<<<<<<< HEAD
+    'x-super-admin-username',
+=======
+>>>>>>> a3b2c40b87ec39d93fdf4e0dc7b1cfe82a990382
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:8000",
+    "http://localhost:4000",  # Updated frontend port
+    "http://localhost:19006",  # Expo web development server
+    "https://chatbackend1.pythonanywhere.com",
 ]
 
 # REST Framework Settings

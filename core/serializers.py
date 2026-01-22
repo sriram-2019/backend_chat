@@ -2,9 +2,10 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from .models import (
-    StudentProfile, ChatHistory, Feedback, 
+    StudentProfile, ChatHistory, 
     AdminProfile, UnsolvedQuestion, Document, Analytics,
-    Rule, Syllabus, ExamInformation, KnowledgeBase
+    Rule, Syllabus, ExamInformation, KnowledgeBase,
+    UserSettings, ImageQuery, AdminActivityLog, Notification, SystemReport
 )
 
 class UserSerializer(serializers.ModelSerializer):
@@ -93,7 +94,9 @@ class ChatHistorySerializer(serializers.ModelSerializer):
     
     class Meta:
         model = ChatHistory
-        fields = ['id', 'user_id', 'username', 'message', 'response', 'sender', 'intent', 'timestamp', 'session_id', 'is_saved']
+        fields = ['id', 'user_id', 'username', 'message', 'response', 'sender', 'intent', 
+                  'confidence_score', 'source_details', 'timestamp', 'session_id', 'is_saved',
+                  'is_helpful', 'feedback']
         read_only_fields = ['timestamp']
 
 class ChatHistoryCreateSerializer(serializers.ModelSerializer):
@@ -101,27 +104,31 @@ class ChatHistoryCreateSerializer(serializers.ModelSerializer):
         model = ChatHistory
         fields = ['message', 'response', 'sender', 'session_id']
 
-class FeedbackSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Feedback
-        fields = ['id', 'chat_history', 'rating', 'comment', 'timestamp']
-        read_only_fields = ['timestamp']
+
 
 class AdminProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
+    approved_by_name = serializers.CharField(source='approved_by.username', read_only=True, allow_null=True)
     
     class Meta:
         model = AdminProfile
-        fields = ['id', 'user', 'full_name', 'email', 'prof_id', 'phone', 'department', 'created_at', 'updated_at']
-        read_only_fields = ['created_at', 'updated_at']
+        fields = ['id', 'user', 'full_name', 'email', 'prof_id', 'phone', 'department', 
+                  'role', 'approval_status', 'approved_by', 'approved_by_name', 'approved_at',
+                  'rejection_reason', 'permissions', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at', 'approved_at']
 
 class UnsolvedQuestionSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True, allow_null=True)
+    full_name = serializers.CharField(source='user.student_profile.full_name', read_only=True, allow_null=True)
+    roll_no = serializers.CharField(source='user.student_profile.roll_no', read_only=True, allow_null=True)
+    feedback = serializers.CharField(source='chat_history.feedback', read_only=True, allow_null=True)
+    ai_response = serializers.CharField(source='chat_history.response', read_only=True, allow_null=True)
     resolved_by_name = serializers.CharField(source='resolved_by.username', read_only=True, allow_null=True)
     
     class Meta:
         model = UnsolvedQuestion
-        fields = ['id', 'user', 'user_name', 'question', 'chat_history', 'status', 
+        fields = ['id', 'user', 'user_name', 'full_name', 'roll_no', 'question', 
+                  'chat_history', 'feedback', 'ai_response', 'status', 
                   'resolved_by', 'resolved_by_name', 'resolved_answer', 'resolved_at', 
                   'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
@@ -131,17 +138,17 @@ class DocumentSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Document
-        fields = ['id', 'title', 'document_type', 'file_path', 'file_name', 'file_size',
+        fields = ['id', 'title', 'document_type', 'file_name', 'file_size',
                   'description', 'uploaded_by', 'uploaded_by_name', 'extracted_text',
-                  'metadata', 'created_at', 'updated_at']
+                  'metadata', 'visibility', 'target_departments', 'target_years', 'target_user_groups',
+                  'is_compressed', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at', 'uploaded_by']
 
 class AnalyticsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Analytics
         fields = ['id', 'date', 'total_questions', 'total_users', 'kb_matches',
-                  'ai_fallbacks', 'helpful_feedback', 'not_helpful_feedback',
-                  'unsolved_questions', 'created_at']
+                  'ai_fallbacks', 'unsolved_questions', 'created_at']
         read_only_fields = ['created_at']
 
 class RuleSerializer(serializers.ModelSerializer):
@@ -186,3 +193,63 @@ class KnowledgeBaseSerializer(serializers.ModelSerializer):
         fields = ['id', 'question', 'answer', 'type', 'approved', 'approved_by', 'approved_by_name',
                   'approved_at', 'created_by', 'created_by_name', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at', 'approved_at']
+
+
+# New serializers for added features
+
+class UserSettingsSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    
+    class Meta:
+        model = UserSettings
+        fields = ['id', 'username', 'dark_mode', 'push_notifications_enabled', 
+                  'voice_enabled', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class ImageQuerySerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = ImageQuery
+        fields = ['id', 'username', 'image', 'query_text', 'ai_response', 
+                  'confidence_score', 'created_at']
+        read_only_fields = ['ai_response', 'confidence_score', 'created_at']
+
+
+class AdminActivityLogSerializer(serializers.ModelSerializer):
+    admin_name = serializers.CharField(source='admin.username', read_only=True)
+    action_display = serializers.CharField(source='get_action_display', read_only=True)
+    target_type_display = serializers.CharField(source='get_target_type_display', read_only=True)
+    
+    class Meta:
+        model = AdminActivityLog
+        fields = ['id', 'admin', 'admin_name', 'action', 'action_display', 
+                  'target_type', 'target_type_display', 'target_id', 'target_title',
+                  'details', 'ip_address', 'timestamp']
+        read_only_fields = ['timestamp']
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    sent_by_name = serializers.CharField(source='sent_by.username', read_only=True, allow_null=True)
+    notification_type_display = serializers.CharField(source='get_notification_type_display', read_only=True)
+    
+    class Meta:
+        model = Notification
+        fields = ['id', 'user', 'title', 'message', 'notification_type', 
+                  'notification_type_display', 'is_read', 'metadata', 
+                  'sent_by', 'sent_by_name', 'created_at']
+        read_only_fields = ['created_at']
+
+
+class SystemReportSerializer(serializers.ModelSerializer):
+    generated_by_name = serializers.CharField(source='generated_by.username', read_only=True, allow_null=True)
+    report_type_display = serializers.CharField(source='get_report_type_display', read_only=True)
+    
+    class Meta:
+        model = SystemReport
+        fields = ['id', 'report_type', 'report_type_display', 'report_format',
+                  'file_path', 'file_name', 'generated_by', 'generated_by_name',
+                  'parameters', 'created_at']
+        read_only_fields = ['created_at']
+

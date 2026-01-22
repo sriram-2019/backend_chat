@@ -1,416 +1,790 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from django.contrib.auth import authenticate, login, logout
+from rest_framework.permissions import AllowAny
 from django.contrib.auth.models import User
+from django.contrib.auth import authenticate, login, logout
 from django.db.models import Q
-from .models import StudentProfile, ChatHistory, Feedback, UnsolvedQuestion
-from .serializers import (
-    UserSerializer,
-    StudentProfileSerializer,
-    UserRegisterSerializer,
-    ChatHistorySerializer,
-    ChatHistoryCreateSerializer,
-    FeedbackSerializer
+from .models import (
+    StudentProfile, ChatHistory,
+    KnowledgeBase, UserSettings, ImageQuery, Notification
 )
+from .serializers import (
+    StudentProfileSerializer, ChatHistorySerializer,
+    KnowledgeBaseSerializer, UserSettingsSerializer,
+    ImageQuerySerializer, NotificationSerializer, UserRegisterSerializer
+)
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from .models import (
+    StudentProfile, ChatHistory, 
+    AdminProfile, UnsolvedQuestion, Document, Analytics,
+    Rule, Syllabus, ExamInformation, KnowledgeBase,
+    UserSettings, ImageQuery, AdminActivityLog, Notification, SystemReport
+)
+import json
+import base64
+import os
+import tempfile
 
+
+# Helper function to get user from request
+def get_user_from_request(request):
+    """Get user from session or user_id parameter"""
+    user = None
+    
+    # Try session first
+    if request.user.is_authenticated:
+        user = request.user
+    else:
+        # Try user_id from query params or body
+        user_id = request.query_params.get('user_id') or request.data.get('user_id')
+        if user_id:
+            try:
+                user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                pass
+    
+    return user
+
+
+@method_decorator(csrf_exempt, name='dispatch')
 class RegisterView(APIView):
+    """User registration endpoint"""
     permission_classes = [AllowAny]
     
     def post(self, request):
-        # Log received data for debugging
-        print(f"Received registration data: {request.data}")
-        
+        """Register a new user"""
         serializer = UserRegisterSerializer(data=request.data)
         if serializer.is_valid():
+            user = serializer.save()
+            # Get the student profile
             try:
-                user = serializer.save()
-                # Get profile
-                try:
-                    profile = StudentProfile.objects.get(user=user)
-                    profile_data = StudentProfileSerializer(profile).data
-                except StudentProfile.DoesNotExist:
-                    profile_data = None
-                
+                profile = user.student_profile
                 return Response({
-                    "message": "Account created successfully",
-                    "user": {
-                        "id": user.id,
-                        "username": user.username,
-                        "email": user.email,
-                        "full_name": user.get_full_name() or user.username
-                    },
-                    "profile": profile_data
+                    'message': 'Registration successful',
+                    'user': {
+                        'id': user.id,
+                        'username': user.username,
+                        'email': user.email,
+                        'full_name': profile.full_name,
+                        'roll_no': profile.roll_no,
+                        'phone': profile.phone,
+                        'course': profile.course,
+                        'year': profile.year
+                    }
                 }, status=status.HTTP_201_CREATED)
-            except Exception as e:
-                import traceback
-                print(f"Error in registration: {str(e)}")
-                print(traceback.format_exc())
+            except StudentProfile.DoesNotExist:
                 return Response({
-                    "error": str(e),
-                    "details": "An error occurred while creating the account. Please check all fields are filled correctly."
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            except Exception as e:
-                import traceback
-                print(f"Error creating user: {str(e)}")
-                print(traceback.format_exc())
-                return Response({
-                    "error": str(e),
-                    "details": "An error occurred while creating the account"
-                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        # Log validation errors
-        print(f"Validation errors: {serializer.errors}")
-        return Response({
-            "error": "Validation failed",
-            "errors": serializer.errors,
-            "received_data": request.data
-        }, status=status.HTTP_400_BAD_REQUEST)
+                    'message': 'Registration successful',
+                    'user': {
+                        'id': user.id,
+                        'username': user.username,
+                        'email': user.email
+                    }
+                }, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+@method_decorator(csrf_exempt, name='dispatch')
 class LoginView(APIView):
+    """User login endpoint"""
     permission_classes = [AllowAny]
     
     def post(self, request):
-        email = request.data.get('email')
+        """Authenticate user with roll_no and password"""
+        roll_no = request.data.get('roll_no')
         password = request.data.get('password')
-        roll_no = request.data.get('roll_no', '')
         
-        if not email or not password:
+        if not roll_no or not password:
             return Response(
-                {"error": "Email and password are required"},
+                {'error': 'Roll number and password are required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Try to find user by email
+        # Find user by roll_no
         try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
-            return Response(
-                {"error": "Invalid email or password"},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        # Authenticate user
-        user = authenticate(username=user.username, password=password)
-        if not user:
-            return Response(
-                {"error": "Invalid email or password"},
-                status=status.HTTP_401_UNAUTHORIZED
-            )
-        
-        # Optional: Verify roll number if provided (case-insensitive)
-        if roll_no:
-            try:
-                # Case-insensitive roll number check
-                profile = StudentProfile.objects.get(
-                    user=user, 
-                    roll_no__iexact=roll_no.strip()
-                )
-            except StudentProfile.DoesNotExist:
-                return Response(
-                    {"error": "Roll number does not match this account"},
-                    status=status.HTTP_401_UNAUTHORIZED
-                )
-        
-        # Login user
-        login(request, user)
-        
-        # Get student profile
-        try:
-            profile = StudentProfile.objects.get(user=user)
-            profile_data = StudentProfileSerializer(profile).data
-            # Ensure profile data is saved to localStorage
+            profile = StudentProfile.objects.get(roll_no=roll_no)
+            user = profile.user
         except StudentProfile.DoesNotExist:
-            profile_data = None
+            return Response(
+                {'error': 'Invalid roll number or password'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
         
-        return Response({
-            "message": "Login successful",
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "full_name": user.get_full_name() or user.username
-            },
-            "profile": profile_data
-        }, status=status.HTTP_200_OK)
+        # Authenticate
+        authenticated_user = authenticate(username=user.username, password=password)
+        if authenticated_user:
+            login(request, authenticated_user)
+            return Response({
+                'message': 'Login successful',
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'full_name': profile.full_name,
+                    'roll_no': profile.roll_no,
+                    'phone': profile.phone,
+                    'course': profile.course,
+                    'year': profile.year
+                }
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {'error': 'Invalid roll number or password'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
 
 class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]
+    """User logout endpoint"""
+    permission_classes = [AllowAny]
     
     def post(self, request):
+        """Logout the current user"""
         logout(request)
-        return Response({"message": "Logout successful"}, status=status.HTTP_200_OK)
+        return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
+
 
 class UserProfileView(APIView):
-    permission_classes = [IsAuthenticated]
+    """User profile management"""
+    permission_classes = [AllowAny]
     
     def get(self, request):
+        """Get current user profile"""
+        user = get_user_from_request(request)
+        if not user:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
         try:
-            profile = StudentProfile.objects.get(user=request.user)
+            profile = user.student_profile
             serializer = StudentProfileSerializer(profile)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except StudentProfile.DoesNotExist:
             return Response(
-                {"error": "Profile not found"},
+                {'error': 'Profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    def put(self, request):
+        """Update user profile"""
+        user = get_user_from_request(request)
+        if not user:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            profile = user.student_profile
+            
+            # Update allowed fields
+            if 'full_name' in request.data:
+                profile.full_name = request.data['full_name']
+            if 'phone' in request.data:
+                profile.phone = request.data['phone']
+            if 'email' in request.data:
+                profile.email = request.data['email']
+                user.email = request.data['email']
+                user.save()
+            
+            profile.save()
+            serializer = StudentProfileSerializer(profile)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except StudentProfile.DoesNotExist:
+            return Response(
+                {'error': 'Profile not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
+
 class ChatHistoryView(APIView):
-    permission_classes = [AllowAny]  # Changed to AllowAny for now
+    """Chat history management"""
+    permission_classes = [AllowAny]
     
     def get(self, request):
-        """Get chat history for the authenticated user"""
-        # Get user from session if authenticated
-        user = request.user if request.user.is_authenticated else None
-        
-        # If not authenticated, try to get user from query params or request data
-        if not user:
-            user_id = request.query_params.get('user_id') or request.data.get('user_id')
-            if user_id:
-                try:
-                    user = User.objects.get(id=user_id)
-                except User.DoesNotExist:
-                    pass
-        
-        # If still no user, try to get from email/username in localStorage
-        if not user:
-            email = request.query_params.get('email')
-            if email:
-                try:
-                    user = User.objects.get(email=email)
-                except User.DoesNotExist:
-                    pass
+        """Get chat history for a user"""
+        user = get_user_from_request(request)
+        email = request.query_params.get('email')
         
         if user:
-            # Filter chat history for this specific user only
-            chats = ChatHistory.objects.filter(user=user).order_by('timestamp')  # Oldest first
-            serializer = ChatHistorySerializer(chats, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            # Get history by user
+            history = ChatHistory.objects.filter(user=user).order_by('timestamp')
+        elif email:
+            # Fallback: get by email
+            try:
+                user = User.objects.get(email=email)
+                history = ChatHistory.objects.filter(user=user).order_by('timestamp')
+            except User.DoesNotExist:
+                return Response([], status=status.HTTP_200_OK)
         else:
-            # Return empty if no user found
             return Response([], status=status.HTTP_200_OK)
-    
-    def post(self, request):
-        """Create a new chat message"""
-        serializer = ChatHistoryCreateSerializer(data=request.data)
-        if serializer.is_valid():
-            chat = serializer.save(user=request.user)
-            response_serializer = ChatHistorySerializer(chat)
-            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        serializer = ChatHistorySerializer(history, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class ChatMessageView(APIView):
-    permission_classes = [AllowAny]  # Changed to AllowAny for now, can be changed back to IsAuthenticated
+    """Send chat messages and get AI responses"""
+    permission_classes = [AllowAny]
     
     def post(self, request):
-        """Send a message and get AI response"""
-        message = request.data.get('message')
+        """Process a chat message and return AI response"""
+        message = request.data.get('message', '').strip()
         session_id = request.data.get('session_id', '')
         
         if not message:
             return Response(
-                {"error": "Message is required"},
+                {'error': 'Message is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Get user from session if authenticated
-        user = request.user if request.user.is_authenticated else None
-        
-        # If not authenticated, try to get user from request data
-        if not user:
-            user_id = request.data.get('user_id')
-            if user_id:
-                try:
-                    user = User.objects.get(id=user_id)
-                except User.DoesNotExist:
-                    pass
-            
-            # Try email if user_id not found
-            if not user:
-                email = request.data.get('email')
-                if email:
-                    try:
-                        user = User.objects.get(email=email)
-                    except User.DoesNotExist:
-                        pass
+        user = get_user_from_request(request)
         
         try:
-            # Import AI service
-            from .ai_service import get_hybrid_response
+            # Import the chat router
+            from .chat_router import chat_reply
             
-            # Save user message first
-            user_message = ChatHistory.objects.create(
-                user=user,
-                message=message,
-                sender='user',
-                session_id=session_id
+            # Get AI response with details
+            response_text, intent, confidence_score, source_details = chat_reply(
+                message, user, return_details=True
             )
             
-            # Get AI response using hybrid approach (KB + Gemini)
-            response_text, intent = get_hybrid_response(
-                user_text=message,
-                user=user
-            )
-            
-            # Save AI response
-            assistant_entry = ChatHistory.objects.create(
+            # Save chat history
+            chat = ChatHistory.objects.create(
                 user=user,
                 message=message,
                 response=response_text,
                 sender='assistant',
                 intent=intent,
+                confidence_score=confidence_score,
+                source_details=source_details,
                 session_id=session_id
             )
             
             return Response({
-                "message": response_text,
-                "response": response_text,  # For compatibility
-                "chat_id": assistant_entry.id,
-                "session_id": session_id,
-                "intent": intent
+                'message': response_text,
+                'response': response_text,
+                'chat_id': chat.id,
+                'intent': intent,
+                'confidence_score': confidence_score,
+                'source': intent,
+                'source_details': source_details
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
-            import traceback
-            print(f"Error in ChatMessageView: {str(e)}")
-            print(traceback.format_exc())
-            
-            # Save error message
-            error_response = f"Sorry, I encountered an error processing your message. Please try again."
-            error_entry = ChatHistory.objects.create(
-                user=user,
-                message=message,
-                response=error_response,
-                sender='assistant',
-                intent='error',
-                session_id=session_id
+            print(f"Error processing chat message: {str(e)}")
+            return Response(
+                {'error': f'Failed to process message: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-            
-            return Response({
-                "message": error_response,
-                "response": error_response,
-                "chat_id": error_entry.id,
-                "session_id": session_id,
-                "error": str(e)
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-class FeedbackView(APIView):
-    permission_classes = [AllowAny]  # Changed to AllowAny to match chat endpoint
+
+
+
+
+
+class ChatFeedbackView(APIView):
+    """Handle feedback for chat responses"""
+    permission_classes = [AllowAny]
     
     def post(self, request):
+        """Submit feedback for a chat message"""
         chat_id = request.data.get('chat_id')
-        rating = request.data.get('rating')
-        comment = request.data.get('comment', '')
+        is_helpful = request.data.get('is_helpful')
+        feedback = request.data.get('feedback')
         
-        if not chat_id or not rating:
+        if not chat_id:
             return Response(
-                {"error": "chat_id and rating are required"},
+                {'error': 'chat_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        if is_helpful is None:
+             return Response(
+                {'error': 'is_helpful (boolean) is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Get user from session if authenticated
-        user = request.user if request.user.is_authenticated else None
-        
-        # Get chat entry
         try:
             chat = ChatHistory.objects.get(id=chat_id)
+            
+            # Check if feedback already exists
+            if chat.is_helpful is not None:
+                return Response(
+                    {'error': 'Feedback already submitted for this message'},
+                    status=status.HTTP_409_CONFLICT
+                )
+            
+            chat.is_helpful = is_helpful
+            
+            # If helpful is True and no specific feedback provided, set default message
+            if is_helpful and not feedback:
+                chat.feedback = "No issues, satisfied"
+            else:
+                chat.feedback = feedback
+                
+            chat.save()
+            
+            # If negative feedback, auto-create UnsolvedQuestion
+            if not is_helpful:
+                # Check if already exists to avoid duplicates
+                if not UnsolvedQuestion.objects.filter(chat_history=chat).exists():
+                    UnsolvedQuestion.objects.create(
+                        user=chat.user,
+                        question=chat.message,
+                        chat_history=chat,
+                        status='pending'
+                    )
+            
+            return Response({'status': 'Feedback submitted successfully'}, status=status.HTTP_200_OK)
+            
         except ChatHistory.DoesNotExist:
             return Response(
-                {"error": "Chat not found"},
+                {'error': 'Chat entry not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class SavedAnswersView(APIView):
+    """Saved answers management"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """Get all saved answers for a user"""
+        user = get_user_from_request(request)
+        if not user:
+            return Response(
+                {'error': 'User not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # If user is authenticated, verify chat belongs to them
-        # If not authenticated, use the chat's user (for compatibility)
-        if user:
-            if chat.user != user:
-                return Response(
-                    {"error": "You can only provide feedback on your own chats"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        else:
-            # Use chat's user if not authenticated
-            user = chat.user
-            if not user:
-                return Response(
-                    {"error": "User authentication required"},
-                    status=status.HTTP_401_UNAUTHORIZED
-                )
-        
-        feedback = Feedback.objects.create(
-            chat_history=chat,
-            user=user,
-            rating=rating,
-            comment=comment
-        )
-        
-        # If feedback is "not_helpful", create unsolved question
-        if rating == 'not_helpful':
-            UnsolvedQuestion.objects.get_or_create(
-                chat_history=chat,
-                defaults={
-                    'user': user,
-                    'question': chat.message,
-                    'status': 'pending'
-                }
-            )
-        
-        serializer = FeedbackSerializer(feedback)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-class SavedAnswersView(APIView):
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        """Get all saved answers for the user"""
-        saved_chats = ChatHistory.objects.filter(
-            user=request.user,
-            is_saved=True
-        ).order_by('-timestamp')
-        
+        # Get saved chats
+        saved_chats = ChatHistory.objects.filter(user=user, is_saved=True).order_by('-timestamp')
         serializer = ChatHistorySerializer(saved_chats, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     def post(self, request):
         """Save a chat answer"""
         chat_id = request.data.get('chat_id')
-        
         if not chat_id:
             return Response(
-                {"error": "chat_id is required"},
+                {'error': 'chat_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
-            chat = ChatHistory.objects.get(id=chat_id, user=request.user)
+            chat = ChatHistory.objects.get(id=chat_id)
             chat.is_saved = True
             chat.save()
-            return Response({"message": "Answer saved successfully"}, status=status.HTTP_200_OK)
+            return Response({
+                'message': 'Answer saved successfully'
+            }, status=status.HTTP_200_OK)
         except ChatHistory.DoesNotExist:
             return Response(
-                {"error": "Chat not found"},
+                {'error': 'Chat not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
     
     def delete(self, request):
-        """Unsave a chat answer"""
+        """Remove a saved answer"""
         chat_id = request.data.get('chat_id')
-        
         if not chat_id:
             return Response(
-                {"error": "chat_id is required"},
+                {'error': 'chat_id is required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
-            chat = ChatHistory.objects.get(id=chat_id, user=request.user)
+            chat = ChatHistory.objects.get(id=chat_id)
             chat.is_saved = False
             chat.save()
-            return Response({"message": "Answer unsaved successfully"}, status=status.HTTP_200_OK)
+            return Response({
+                'message': 'Answer unsaved successfully'
+            }, status=status.HTTP_200_OK)
         except ChatHistory.DoesNotExist:
             return Response(
-                {"error": "Chat not found"},
+                {'error': 'Chat not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
+
+class UserSettingsView(APIView):
+    """User settings (dark mode, notifications, etc.)"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """Get user settings"""
+        user = get_user_from_request(request)
+        if not user:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get or create settings
+        settings, created = UserSettings.objects.get_or_create(user=user)
+        serializer = UserSettingsSerializer(settings)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    def put(self, request):
+        """Update user settings"""
+        user = get_user_from_request(request)
+        if not user:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        settings, created = UserSettings.objects.get_or_create(user=user)
+        
+        # Update settings
+        if 'dark_mode' in request.data:
+            settings.dark_mode = request.data['dark_mode']
+        if 'push_notifications_enabled' in request.data:
+            settings.push_notifications_enabled = request.data['push_notifications_enabled']
+        if 'voice_enabled' in request.data:
+            settings.voice_enabled = request.data['voice_enabled']
+        
+        settings.save()
+        serializer = UserSettingsSerializer(settings)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class SearchView(APIView):
+    """Search across chat history, documents, and knowledge base"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """Search for content"""
+        keyword = request.query_params.get('keyword', '').strip()
+        search_type = request.query_params.get('type', 'all')
+        
+        if not keyword:
+            return Response(
+                {'error': 'Search keyword is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = get_user_from_request(request)
+        results = {
+            'chat_results': [],
+            'kb_results': [],
+        }
+        
+        # Search chat history
+        if search_type in ['all', 'chat']:
+            chat_query = ChatHistory.objects.filter(
+                Q(message__icontains=keyword) | Q(response__icontains=keyword)
+            )
+            if user:
+                chat_query = chat_query.filter(user=user)
+            chat_query = chat_query[:20]
+            results['chat_results'] = ChatHistorySerializer(chat_query, many=True).data
+        
+        # Search knowledge base
+        if search_type in ['all', 'kb']:
+            kb_query = KnowledgeBase.objects.filter(
+                Q(question__icontains=keyword) | Q(answer__icontains=keyword),
+                approved=True
+            )[:20]
+            results['kb_results'] = KnowledgeBaseSerializer(kb_query, many=True).data
+        
+        return Response(results, status=status.HTTP_200_OK)
+
+
+class ImageQueryView(APIView):
+    """Process image queries with AI"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        """Process an uploaded image with optional text query
+        
+        Accepts either:
+        1. FormData with 'image' file field (traditional upload)
+        2. JSON with 'image_base64' field (base64 encoded image for mobile compatibility)
+        """
+        query_text = request.data.get('query_text', '')
+        user = get_user_from_request(request)
+        
+        # Check for base64 image first (mobile compatibility)
+        image_base64 = request.data.get('image_base64')
+        mime_type = request.data.get('mime_type', 'image/jpeg')
+        
+        # Also check for FormData file upload
+        image_file = request.FILES.get('image')
+        
+        if not image_base64 and not image_file:
+            return Response(
+                {'error': 'No image provided. Send either image_base64 or image file.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            import tempfile
+            import os as temp_os
+            
+            temp_path = None
+            
+            if image_base64:
+                # Handle base64 image from mobile
+                try:
+                    # Decode base64
+                    import base64 as b64
+                    image_data = b64.b64decode(image_base64)
+                    
+                    # Determine file extension from mime type
+                    ext_map = {
+                        'image/jpeg': '.jpg',
+                        'image/jpg': '.jpg',
+                        'image/png': '.png',
+                        'image/gif': '.gif',
+                        'image/webp': '.webp',
+                    }
+                    ext = ext_map.get(mime_type.lower(), '.jpg')
+                    
+                    # Save to temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp_file:
+                        tmp_file.write(image_data)
+                        temp_path = tmp_file.name
+                    
+                    print(f"Saved base64 image to: {temp_path} (size: {len(image_data)} bytes)")
+                    
+                    # Create ImageQuery record (without file, just track the query)
+                    image_query = ImageQuery.objects.create(
+                        user=user,
+                        query_text=query_text
+                    )
+                    
+                    # Use the temp file path for analysis
+                    image_path = temp_path
+                    
+                except Exception as decode_error:
+                    print(f"Error decoding base64 image: {decode_error}")
+                    return Response(
+                        {'error': f'Failed to decode base64 image: {str(decode_error)}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                # Handle traditional file upload
+                image_query = ImageQuery.objects.create(
+                    user=user,
+                    image=image_file,
+                    query_text=query_text
+                )
+                image_path = image_query.image.path
+            
+            # Analyze image with Gemini Vision
+            try:
+                from .ai_service import analyze_image_with_gemini
+                
+                result = analyze_image_with_gemini(image_path, query_text)
+                
+                # Check if Gemini returned a skip response (image not related to system prompt)
+                if result.get('skip', False):
+                    # Image is not related to college/education content - skip it
+                    image_query.ai_response = "Image not related to college/education content"
+                    image_query.confidence_score = 0.0
+                    image_query.save()
+                    
+                    # Clean up temp file if used
+                    if temp_path and temp_os.path.exists(temp_path):
+                        temp_os.unlink(temp_path)
+                    
+                    return Response({
+                        'message': 'Image not related to college/education content',
+                        'skipped': True,
+                        'ai_response': None,
+                        'confidence_score': 0.0,
+                        'image_query_id': image_query.id,
+                    }, status=status.HTTP_200_OK)
+                
+                ai_response = result.get('response', 'I received your image.')
+                confidence_score = result.get('confidence', 50.0)
+                success = result.get('success', False)
+                
+                if not success:
+                    print(f"Image analysis error: {result.get('error')}")
+                
+            except Exception as e:
+                print(f"Error importing/calling image analysis: {str(e)}")
+                ai_response = "I received your image but couldn't analyze it. Please describe what you need help with."
+                confidence_score = 30.0
+            
+            # Update the image query with AI response
+            image_query.ai_response = ai_response
+            image_query.confidence_score = confidence_score
+            image_query.save()
+            
+<<<<<<< HEAD
+            # Create ChatHistory record for consistency and feedback support
+            chat = ChatHistory.objects.create(
+                user=user,
+                message=query_text or "[Image Query]",
+                response=ai_response,
+                sender='assistant',
+                intent='image_query',
+                confidence_score=confidence_score,
+                source_details={'image_query_id': image_query.id}
+            )
+            
+=======
+>>>>>>> a3b2c40b87ec39d93fdf4e0dc7b1cfe82a990382
+            # Clean up temp file if used
+            if temp_path and temp_os.path.exists(temp_path):
+                temp_os.unlink(temp_path)
+            
+            return Response({
+                'message': 'Image processed successfully',
+                'ai_response': ai_response,
+                'confidence_score': confidence_score,
+                'image_query_id': image_query.id,
+<<<<<<< HEAD
+                'chat_id': chat.id,
+=======
+>>>>>>> a3b2c40b87ec39d93fdf4e0dc7b1cfe82a990382
+                'source': 'ai',
+                'skipped': False
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            print(f"Error processing image: {str(e)}")
+            # Clean up temp file if error
+            if 'temp_path' in locals() and temp_path and temp_os.path.exists(temp_path):
+                temp_os.unlink(temp_path)
+            return Response(
+                {'error': f'Failed to process image: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class NotificationView(APIView):
+    """User notifications management"""
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        """Get notifications for a user"""
+        user = get_user_from_request(request)
+        if not user:
+            return Response([], status=status.HTTP_200_OK)
+        
+        unread_only = request.query_params.get('unread_only', 'false').lower() == 'true'
+        
+        notifications = Notification.objects.filter(user=user)
+        if unread_only:
+            notifications = notifications.filter(is_read=False)
+        
+        notifications = notifications.order_by('-created_at')[:50]
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    def put(self, request):
+        """Mark notifications as read"""
+        user = get_user_from_request(request)
+        if not user:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        notification_id = request.data.get('notification_id')
+        mark_all = request.data.get('mark_all', False)
+        
+        if mark_all:
+            Notification.objects.filter(user=user, is_read=False).update(is_read=True)
+            return Response({'message': 'All notifications marked as read'}, status=status.HTTP_200_OK)
+        elif notification_id:
+            try:
+                notification = Notification.objects.get(id=notification_id, user=user)
+                notification.is_read = True
+                notification.save()
+                return Response({'message': 'Notification marked as read'}, status=status.HTTP_200_OK)
+            except Notification.DoesNotExist:
+                return Response(
+                    {'error': 'Notification not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            return Response(
+                {'error': 'notification_id or mark_all is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class VoiceToTextView(APIView):
+    """Convert voice/audio to text using speech recognition"""
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        """Convert audio file to text"""
+        try:
+            audio_file = request.FILES.get('audio')
+            if not audio_file:
+                return Response(
+                    {"error": "No audio file provided"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Save audio file temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as tmp_file:
+                for chunk in audio_file.chunks():
+                    tmp_file.write(chunk)
+                tmp_path = tmp_file.name
+            
+            try:
+                # Try using speech_recognition library
+                import speech_recognition as sr
+                
+                r = sr.Recognizer()
+                
+                # Convert audio format if needed
+                audio_format = audio_file.name.split('.')[-1].lower()
+                
+                # Use speech_recognition to transcribe
+                with sr.AudioFile(tmp_path) as source:
+                    audio_data = r.record(source)
+                
+                # Try Google Speech Recognition (free, no API key needed for limited use)
+                try:
+                    text = r.recognize_google(audio_data, language='en-US')
+                except sr.UnknownValueError:
+                    return Response(
+                        {"error": "Could not understand audio. Please speak clearly."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                except sr.RequestError as e:
+                    # Fallback: return a placeholder message
+                    return Response(
+                        {"error": "Speech recognition service unavailable. Please type your message."},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE
+                    )
+                
+                return Response({
+                    "text": text,
+                    "message": "Audio transcribed successfully"
+                }, status=status.HTTP_200_OK)
+                
+            except ImportError:
+                # If speech_recognition is not installed, provide helpful error
+                return Response(
+                    {"error": "Speech recognition library not installed. Please install: pip install SpeechRecognition pydub"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE
+                )
+            except Exception as e:
+                return Response(
+                    {"error": f"Error processing audio: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            finally:
+                # Clean up temp file
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                    
+        except Exception as e:
+            return Response(
+                {"error": f"Error: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
